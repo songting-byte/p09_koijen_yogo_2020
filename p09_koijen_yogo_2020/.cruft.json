@@ -1,0 +1,42 @@
+{
+  "template": "https://github.com/backofficedev/cookiecutter_chartbook",
+  "commit": "a52959a3dfb4296855c3d667463f0b8110424e66",
+  "checkout": null,
+  "context": {
+    "cookiecutter": {
+      "project_name": "p09_koijen_yogo_2020",
+      "project_slug": "p09_koijen_yogo_2020",
+      "project_description": "Our replication",
+      "author_name": "Allen Wu & Nandini Krishnan & Xiongfei Wang",
+      "author_email": "songting@uchicago.edu & nandinikrishnan@uchicago.edu & walter26@uchicago.edu",
+      "python_version": "3.12",
+      "environment_manager": "pip",
+      "include_latex_reports": true,
+      "include_jupyter_notebooks": true,
+      "include_r_scripts": false,
+      "include_stata_scripts": false,
+      "include_chartbook": true,
+      "include_github_actions": true,
+      "include_fred": false,
+      "include_fed_yield_curve": false,
+      "include_ofr_api": false,
+      "include_bloomberg": true,
+      "include_crsp_stock": true,
+      "include_crsp_compustat": false,
+      "_copy_without_render": [
+        "*.bst",
+        "*.sty",
+        "*.eps",
+        "*.ipe",
+        "*.png",
+        "*.pdf",
+        "*.tex",
+        "*.bib",
+        ".github/workflows/*.yml"
+      ],
+      "_template": "https://github.com/backofficedev/cookiecutter_chartbook",
+      "_commit": "a52959a3dfb4296855c3d667463f0b8110424e66"
+    }
+  },
+  "directory": null
+}
