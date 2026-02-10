@@ -110,6 +110,18 @@ def task_pull():
         "clean": [],
     }
 
+def task_generate_chart():
+    """Run generate_chart.py to produce the chart"""
+    script_path = "./src/generate_chart.py"
+    output_file = OUTPUT_DIR / "obs_value_by_sector.html"  
+
+    return {
+        "actions": [f"ipython {script_path}"],
+        "file_dep": [script_path],
+        "targets": [output_file],
+        "clean": True,
+    }
+
 
 def task_summary_stats():
     """Generate summary statistics tables"""
