@@ -4,6 +4,7 @@ Domestic debt securities come from WS_NA_SEC_DSS (NA debt securities statistics)
 International debt securities come from WS_DEBT_SEC2_PUB (BIS-compiled IDS).
 """
 import pandas as pd
+from pathlib import Path
 
 COUNTRY_NAME_TO_CODE = {
     "Australia": "AU",
@@ -19,7 +20,6 @@ COUNTRY_NAME_TO_CODE = {
     "Israel": "IL",
     "Brazil": "BR",
 }
-
 
 
 # Querying the data
@@ -61,3 +61,19 @@ df = df.drop(columns=existing_cols_to_drop)
 
 print("Remaining columns:")
 print(df.columns.tolist())
+
+
+# Paths 
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = REPO_ROOT / "_data"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Path for cleaned data
+CLEAN_PATH = OUTPUT_DIR / "bis_debt_securities_cleaned.parquet"
+
+# Save cleaned df to parquet
+
+df.to_parquet(CLEAN_PATH, index=False)
+
+print("Cleaned data saved to:", CLEAN_PATH)
