@@ -86,27 +86,27 @@ def task_config():
 
 
 def task_pull():
-    """Pull data from external sources"""
+    """Pull data from BIS and OECD"""
     yield {
-        "name": "bloomberg",
-        "doc": "Pull data from Bloomberg",
+        "name": "bis",
+        "doc": "Pull BIS debt securities data",
         "actions": [
             "ipython ./src/settings.py",
-            "ipython ./src/pull_bloomberg.py",
+            "ipython ./src/pull_bis.py",
         ],
-        "targets": [DATA_DIR / "bloomberg.parquet"],
-        "file_dep": ["./src/settings.py", "./src/pull_bloomberg.py"],
+        "targets": [DATA_DIR / "bis_debt_securities.parquet"],
+        "file_dep": ["./src/settings.py", "./src/pull_bis.py"],
         "clean": [],
     }
     yield {
-        "name": "crsp_stock",
-        "doc": "Pull CRSP stock data from WRDS",
+        "name": "oecd_t720",
+        "doc": "Pull OECD Table 720 balance sheet data",
         "actions": [
             "ipython ./src/settings.py",
-            "ipython ./src/pull_CRSP_stock.py",
+            "ipython ./src/pull_oecd.py",
         ],
-        "targets": [DATA_DIR / "CRSP_monthly_stock.parquet"],
-        "file_dep": ["./src/settings.py", "./src/pull_CRSP_stock.py"],
+        "targets": [DATA_DIR / "oecd_t720.parquet"],
+        "file_dep": ["./src/settings.py", "./src/pull_oecd.py"],
         "clean": [],
     }
 
