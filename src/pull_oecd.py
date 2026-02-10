@@ -1,12 +1,9 @@
-"""Pull OECD SDMX Table 0720 data and save as a tidy CSV.
+"""Pull OECD SDMX Table 0720 balance sheet data and save as a tidy Parquet.
 
-This script uses the OECD SDMX REST API with the Data Explorer “Developer API
-query builder” URL as a template. It first queries the SDMX structure to learn
-dimension order and code lists, then batches data requests (by reference area
-and, if needed, by instrument/maturity) to avoid oversized responses.
-
-To reproduce or change the year range, update `OECD_START_PERIOD` and
-`OECD_END_PERIOD` in your `.env` file (or edit the defaults below).
+This script pulls Table 720 (Non-Consolidated Financial Balance Sheets,
+SNA 2008) for general government. It targets annual, end-of-period stocks in
+national currency (XDC) for 2003-2020 and a fixed list of instruments and
+countries.
 """
 
 from datetime import date, datetime
@@ -30,7 +27,9 @@ OECD_BASE_DATA_URL = config(
     default=(
         "https://sdmx.oecd.org/public/rest/data/"
         "OECD.SDD.NAD,DSD_NASEC20@DF_T720R_A,1.1/"
-        "A..USA..S1......T+S+L.USD......?startPeriod=2003&endPeriod=2020"
+        "A..CAN+USA+BEL+DNK+FIN+FRA+DEU+ITA+ISR+NLD+NOR+PRT+ESP+SWE+CHE+GBR+"
+        "BRA+JPN+COL+CZE+GRC+HUN+MEX+POL+KOR+AUT..S13....LE.F2+F3+F4+F5.."
+        "XDC._T.S.V.N.T0720._Z?startPeriod=2003&endPeriod=2020"
         "&dimensionAtObservation=AllDimensions"
     ),
     cast=str,
@@ -38,7 +37,7 @@ OECD_BASE_DATA_URL = config(
 
 OECD_START_PERIOD = config("OECD_START_PERIOD", default="2003", cast=str)
 OECD_END_PERIOD = config("OECD_END_PERIOD", default="2020", cast=str)
-OECD_OUTPUT_FILE = config("OECD_OUTPUT_FILE", default="oecd_t720.csv", cast=str)
+OECD_OUTPUT_FILE = config("OECD_OUTPUT_FILE", default="oecd_t720.parquet", cast=str)
 OECD_STRUCTURE_CACHE = config(
     "OECD_STRUCTURE_CACHE",
     default=str(Path(DATA_DIR) / "oecd_t720_structure.xml"),
@@ -46,9 +45,53 @@ OECD_STRUCTURE_CACHE = config(
 )
 OECD_STRUCTURE_REFRESH = config("OECD_STRUCTURE_REFRESH", default="0", cast=str)
 
-# Target instruments and maturity splits
-TARGET_INSTRUMENTS = ["F3", "F51", "F5", "F519"]
-TARGET_MATURITY_CODES = ["T", "S", "L"]
+# Target OECD instrument codes for DF_T720R_A
+TARGET_INSTRUMENTS = [
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+]
+
+# Optional aliasing from legacy LF* codes to DF_T720R_A F* codes
+INSTRUMENT_ALIASES = {
+    "LF3SLINK": "F3",
+    "LF3LLINK": "F3",
+    "LF51LINK": "F5",
+    "LF3LINC": "F3",
+    "LF519LINC": "F5",
+    "LF5LINC": "F5",
+}
+
+# OECD reference areas (ISO3)
+TARGET_REFERENCE_AREAS = [
+    "CAN",
+    "USA",
+    "BEL",
+    "DNK",
+    "FIN",
+    "FRA",
+    "DEU",
+    "ITA",
+    "ISR",
+    "NLD",
+    "NOR",
+    "PRT",
+    "ESP",
+    "SWE",
+    "CHE",
+    "GBR",
+    "BRA",
+    "JPN",
+    "COL",
+    "CZE",
+    "GRC",
+    "HUN",
+    "MEX",
+    "POL",
+    "KOR",
+    "AUT",
+]
 
 
 def _format_period(value):
@@ -120,10 +163,6 @@ def _parse_base_url(base_url):
 
 def _structure_url(flow_ref):
     return "https://sdmx.oecd.org/public/rest/datastructure/" f"{flow_ref}"
-
-
-def _dataflow_url(flow_ref):
-    return "https://sdmx.oecd.org/public/rest/dataflow/" f"{flow_ref}"
 
 
 def _dataflow_list_url():
@@ -405,6 +444,50 @@ def _resolve_dim_id(dim_values, candidates):
     return None
 
 
+def _normalize_label(text):
+    if not text:
+        return ""
+    return " ".join(str(text).lower().replace("-", " ").split())
+
+
+def _find_code_by_label(
+    dim_values,
+    dim_id,
+    patterns,
+    preferred_codes=None,
+    allow_missing=False,
+):
+    values = dim_values.get(dim_id, [])
+    if not values:
+        if allow_missing:
+            return None
+        raise ValueError(f"Dimension '{dim_id}' not found or empty")
+
+    if preferred_codes:
+        preferred_set = {code.upper() for code in preferred_codes}
+        for value in values:
+            if value.get("code", "").upper() in preferred_set:
+                return value["code"]
+
+    normalized_patterns = [_normalize_label(pat) for pat in patterns or []]
+    for value in values:
+        code = value.get("code")
+        label = _normalize_label(value.get("label"))
+        for pattern in normalized_patterns:
+            if pattern and (pattern in label or pattern == str(code).lower()):
+                return code
+
+    if allow_missing:
+        return None
+
+    sample = ", ".join(
+        f"{value.get('code')}:{value.get('label')}" for value in values[:5]
+    )
+    raise ValueError(
+        f"Unable to match '{dim_id}' using patterns {patterns}. Sample: {sample}"
+    )
+
+
 def pull_oecd_table_0720(
     base_url=OECD_BASE_DATA_URL,
     start_period=OECD_START_PERIOD,
@@ -414,32 +497,225 @@ def pull_oecd_table_0720(
 ):
     session = _build_session(username=username, password=password)
     flow_ref, key_template, base_params = _parse_base_url(base_url)
-    series_dims, obs_dims, dim_values = fetch_structure(flow_ref, session)
+    series_dims, _, dim_values = fetch_structure(flow_ref, session)
 
     ref_area_dim = _resolve_dim_id(dim_values, ["REF_AREA", "REFERENCE_AREA", "LOCATION"])
     instrument_dim = _resolve_dim_id(
         dim_values, ["INSTR_ASSET", "FINANCIAL_INSTRUMENT", "INSTRUMENT"]
     )
     maturity_dim = _resolve_dim_id(dim_values, ["MATURITY", "ORIGINAL_MATURITY"])
+    freq_dim = _resolve_dim_id(dim_values, ["FREQ", "FREQUENCY"])
+    adjustment_dim = _resolve_dim_id(dim_values, ["ADJUSTMENT"])
+    sector_dim = _resolve_dim_id(dim_values, ["SECTOR", "INSTITUTIONAL_SECTOR"])
+    counterpart_area_dim = _resolve_dim_id(dim_values, ["COUNTERPART_AREA"])
+    counterpart_sector_dim = _resolve_dim_id(dim_values, ["COUNTERPART_SECTOR"])
+    consolidation_dim = _resolve_dim_id(dim_values, ["CONSOLIDATION"])
+    transaction_dim = _resolve_dim_id(dim_values, ["TRANSACTION"])
+    unit_measure_dim = _resolve_dim_id(dim_values, ["UNIT_MEASURE"])
+    currency_denom_dim = _resolve_dim_id(dim_values, ["CURRENCY_DENOM", "CURRENCY"])
+    valuation_dim = _resolve_dim_id(dim_values, ["VALUATION"])
+    price_base_dim = _resolve_dim_id(dim_values, ["PRICE_BASE"])
+    accounting_entry_dim = _resolve_dim_id(dim_values, ["ACCOUNTING_ENTRY"])
+    transformation_dim = _resolve_dim_id(dim_values, ["TRANSFORMATION"])
+    table_identifier_dim = _resolve_dim_id(dim_values, ["TABLE_IDENTIFIER"])
+    debt_breakdown_dim = _resolve_dim_id(dim_values, ["DEBT_BREAKDOWN"])
 
     if not ref_area_dim or not instrument_dim:
-        raise ValueError("Required dimensions (reference area, financial instrument) not found")
+        raise ValueError(
+            "Required dimensions (reference area, financial instrument) not found"
+        )
 
-    ref_areas = [v["code"] for v in dim_values[ref_area_dim]]
+    available_ref_areas = {v["code"] for v in dim_values[ref_area_dim]}
+    ref_areas = [code for code in TARGET_REFERENCE_AREAS if code in available_ref_areas]
+    missing_areas = [code for code in TARGET_REFERENCE_AREAS if code not in available_ref_areas]
+    if not ref_areas:
+        raise ValueError("None of the requested reference areas were found")
+    if missing_areas:
+        print(f"Warning: missing reference areas: {', '.join(missing_areas)}")
 
-    instrument_codes = {v["code"] for v in dim_values[instrument_dim]}
-    instruments = [code for code in TARGET_INSTRUMENTS if code in instrument_codes]
+    available_instruments = {v["code"] for v in dim_values[instrument_dim]}
+    instruments = []
+    missing_instruments = []
+    for code in TARGET_INSTRUMENTS:
+        if code in available_instruments:
+            instruments.append(code)
+            continue
+        alias = INSTRUMENT_ALIASES.get(code)
+        if alias and alias in available_instruments:
+            instruments.append(alias)
+            continue
+        missing_instruments.append(code)
+    if missing_instruments:
+        missing = ", ".join(missing_instruments)
+        raise ValueError(
+            "Requested INSTR_ASSET codes not found in dataflow: "
+            f"{missing}"
+        )
 
-    maturity_codes = []
-    if maturity_dim:
-        available_maturity = {v["code"] for v in dim_values[maturity_dim]}
-        maturity_codes = [m for m in TARGET_MATURITY_CODES if m in available_maturity]
+    freq_code = (
+        _find_code_by_label(
+            dim_values,
+            freq_dim,
+            patterns=["annual"],
+            preferred_codes=["A"],
+        )
+        if freq_dim
+        else None
+    )
+    adjustment_code = (
+        _find_code_by_label(
+            dim_values,
+            adjustment_dim,
+            patterns=["neither seasonally adjusted", "not seasonally"],
+            preferred_codes=["N"],
+        )
+        if adjustment_dim
+        else None
+    )
+    sector_code = (
+        _find_code_by_label(
+            dim_values,
+            sector_dim,
+            patterns=["general government"],
+            preferred_codes=["S13"],
+        )
+        if sector_dim
+        else None
+    )
+    counterpart_area_code = (
+        _find_code_by_label(
+            dim_values,
+            counterpart_area_dim,
+            patterns=["world"],
+            preferred_codes=["W"],
+        )
+        if counterpart_area_dim
+        else None
+    )
+    counterpart_sector_code = (
+        _find_code_by_label(
+            dim_values,
+            counterpart_sector_dim,
+            patterns=["total economy"],
+            preferred_codes=["S1"],
+        )
+        if counterpart_sector_dim
+        else None
+    )
+    consolidation_code = (
+        _find_code_by_label(
+            dim_values,
+            consolidation_dim,
+            patterns=["non consolidated", "non-consolidated"],
+            preferred_codes=["N", "NC"],
+        )
+        if consolidation_dim
+        else None
+    )
+    transaction_code = (
+        _find_code_by_label(
+            dim_values,
+            transaction_dim,
+            patterns=["closing balance", "positions", "stocks"],
+            preferred_codes=["LE"],
+        )
+        if transaction_dim
+        else None
+    )
+    unit_measure_code = (
+        _find_code_by_label(
+            dim_values,
+            unit_measure_dim,
+            patterns=["national currency"],
+            preferred_codes=["XDC"],
+        )
+        if unit_measure_dim
+        else None
+    )
+    currency_denom_code = (
+        _find_code_by_label(
+            dim_values,
+            currency_denom_dim,
+            patterns=["all currencies"],
+            preferred_codes=["_T"],
+            allow_missing=True,
+        )
+        if currency_denom_dim
+        else None
+    )
+    valuation_code = (
+        _find_code_by_label(
+            dim_values,
+            valuation_dim,
+            patterns=["standard valuation"],
+            preferred_codes=["S"],
+            allow_missing=True,
+        )
+        if valuation_dim
+        else None
+    )
+    price_base_code = (
+        _find_code_by_label(
+            dim_values,
+            price_base_dim,
+            patterns=["current prices"],
+            preferred_codes=["V"],
+            allow_missing=True,
+        )
+        if price_base_dim
+        else None
+    )
+    transformation_code = (
+        _find_code_by_label(
+            dim_values,
+            transformation_dim,
+            patterns=["non transformed"],
+            preferred_codes=["N"],
+            allow_missing=True,
+        )
+        if transformation_dim
+        else None
+    )
+    table_identifier_code = (
+        _find_code_by_label(
+            dim_values,
+            table_identifier_dim,
+            patterns=["table 0720"],
+            preferred_codes=["T0720"],
+            allow_missing=True,
+        )
+        if table_identifier_dim
+        else None
+    )
+    maturity_code = (
+        _find_code_by_label(
+            dim_values,
+            maturity_dim,
+            patterns=["not applicable"],
+            preferred_codes=["_Z"],
+            allow_missing=True,
+        )
+        if maturity_dim
+        else None
+    )
+    debt_breakdown_code = (
+        _find_code_by_label(
+            dim_values,
+            debt_breakdown_dim,
+            patterns=["not applicable"],
+            preferred_codes=["_Z"],
+            allow_missing=True,
+        )
+        if debt_breakdown_dim
+        else None
+    )
 
     params = {
         **base_params,
         "startPeriod": _format_period(start_period),
         "endPeriod": _format_period(end_period),
         "dimensionAtObservation": "AllDimensions",
+        "format": "jsondata",
     }
 
     dim_rename = {
@@ -451,12 +727,23 @@ def pull_oecd_table_0720(
         dim_rename[maturity_dim] = "original_maturity"
     dim_rename.update(
         {
+            "FREQ": "frequency",
+            "ADJUSTMENT": "adjustment",
+            "COUNTERPART_AREA": "counterpart_area",
+            "COUNTERPART_SECTOR": "counterpart_sector",
             "ACCOUNTING_ENTRY": "accounting_entry",
+            "TRANSACTION": "transaction",
+            "CONSOLIDATION": "consolidation",
             "UNIT_MEASURE": "unit_of_measure",
             "CURRENCY": "currency_of_denomination",
             "CURRENCY_DENOM": "currency_of_denomination",
             "INSTITUTIONAL_SECTOR": "institutional_sector",
             "SECTOR": "institutional_sector",
+            "VALUATION": "valuation",
+            "PRICE_BASE": "price_base",
+            "TRANSFORMATION": "transformation",
+            "TABLE_IDENTIFIER": "table_identifier",
+            "DEBT_BREAKDOWN": "debt_breakdown",
         }
     )
 
@@ -464,19 +751,40 @@ def pull_oecd_table_0720(
     for ref_area in ref_areas:
         time.sleep(0.2)
         for instrument in instruments:
-            if instrument == "F3" and maturity_codes:
-                instrument_maturities = maturity_codes
-            elif maturity_codes:
-                instrument_maturities = [maturity_codes[0]] if "T" in maturity_codes else [maturity_codes[0]]
-            else:
-                instrument_maturities = None
-
             overrides = {
                 ref_area_dim: ref_area,
                 instrument_dim: instrument,
             }
-            if maturity_dim and instrument_maturities:
-                overrides[maturity_dim] = instrument_maturities
+            if freq_dim and freq_code:
+                overrides[freq_dim] = freq_code
+            if adjustment_dim and adjustment_code:
+                overrides[adjustment_dim] = adjustment_code
+            if sector_dim and sector_code:
+                overrides[sector_dim] = sector_code
+            if counterpart_area_dim and counterpart_area_code:
+                overrides[counterpart_area_dim] = counterpart_area_code
+            if counterpart_sector_dim and counterpart_sector_code:
+                overrides[counterpart_sector_dim] = counterpart_sector_code
+            if consolidation_dim and consolidation_code:
+                overrides[consolidation_dim] = consolidation_code
+            if transaction_dim and transaction_code:
+                overrides[transaction_dim] = transaction_code
+            if unit_measure_dim and unit_measure_code:
+                overrides[unit_measure_dim] = unit_measure_code
+            if currency_denom_dim and currency_denom_code:
+                overrides[currency_denom_dim] = currency_denom_code
+            if valuation_dim and valuation_code:
+                overrides[valuation_dim] = valuation_code
+            if price_base_dim and price_base_code:
+                overrides[price_base_dim] = price_base_code
+            if transformation_dim and transformation_code:
+                overrides[transformation_dim] = transformation_code
+            if table_identifier_dim and table_identifier_code:
+                overrides[table_identifier_dim] = table_identifier_code
+            if maturity_dim and maturity_code:
+                overrides[maturity_dim] = maturity_code
+            if debt_breakdown_dim and debt_breakdown_code:
+                overrides[debt_breakdown_dim] = debt_breakdown_code
 
             key = _build_key(series_dims, key_template, overrides)
             payload = _get_json_with_retry(
@@ -501,18 +809,22 @@ def pull_oecd_table_0720(
                 "reference_area",
                 "time_period",
                 "financial_instrument",
-                "original_maturity",
                 "accounting_entry",
+                "transaction",
+                "consolidation",
+                "institutional_sector",
                 "unit_of_measure",
                 "currency_of_denomination",
-                "institutional_sector",
+                "transformation",
                 "value",
             ]
         )
 
     return result
+
+
 if __name__ == "__main__":
     df = pull_oecd_table_0720()
     path = Path(DATA_DIR) / OECD_OUTPUT_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False, encoding="utf-8")
+    df.to_parquet(path, index=False)

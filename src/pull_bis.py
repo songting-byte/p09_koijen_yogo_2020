@@ -66,7 +66,7 @@ INTERNATIONAL_DSD_VERSION = config(
 BIS_START_PERIOD = config("BIS_START_PERIOD", default="2003", cast=str)
 BIS_END_PERIOD = config("BIS_END_PERIOD", default="2020", cast=str)
 BIS_OUTPUT_FILE = config(
-    "BIS_OUTPUT_FILE", default="bis_debt_securities.csv", cast=str
+    "BIS_OUTPUT_FILE", default="bis_debt_securities.parquet", cast=str
 )
 
 BIS_REQUEST_SLEEP_MIN_SECONDS = config(
@@ -286,6 +286,8 @@ def _normalize_columns(df, mappings):
     df = df.rename(columns=mappings)
     if "TIME_PERIOD" in df.columns:
         df = df.rename(columns={"TIME_PERIOD": "year"})
+    if "year" in df.columns:
+        df["year"] = df["year"].astype(str)
     if "OBS_VALUE" in df.columns:
         df = df.rename(columns={"OBS_VALUE": "value"})
     if "value" not in df.columns and "obs_value" in df.columns:
@@ -457,7 +459,7 @@ def main():
     df = pull_bis_debt_securities()
     output_path = Path(DATA_DIR) / BIS_OUTPUT_FILE
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False, encoding="utf-8")
+    df.to_parquet(output_path, index=False)
     print(f"Saved {len(df)} rows to {output_path}")
 
 
