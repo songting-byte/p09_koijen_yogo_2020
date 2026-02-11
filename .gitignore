@@ -28,7 +28,7 @@ drafts/draft_bp.pdf
 /.venv/*
 
 # Sphinx build files
-_docs/
+#_docs/
 
 
 ##############
