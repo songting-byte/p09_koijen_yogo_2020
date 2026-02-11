@@ -98,6 +98,7 @@ def task_pull():
         "file_dep": ["./src/settings.py", "./src/pull_bis.py"],
         "clean": [],
     }
+    '''
     yield {
         "name": "oecd_t720",
         "doc": "Pull OECD Table 720 balance sheet data",
@@ -109,6 +110,7 @@ def task_pull():
         "file_dep": ["./src/settings.py", "./src/pull_oecd.py"],
         "clean": [],
     }
+    '''
 
 def task_generate_chart():
     """Run generate_chart.py to produce the chart"""
