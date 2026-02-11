@@ -31,8 +31,37 @@ notebook_path = "_output/01_example_notebook_interactive.ipynb"
 
 
 
+
+
 [dataframes]
+
+
+[dataframes.repo_public]
+dataframe_name = "BIS Debt securities statistics"
+short_description_df = "borrowing and investment activities in debt capital markets"
+data_sources = ["National data", "BIS calculations"]
+data_providers = ["National data", "BIS calculations"]
+links_to_data_providers = ["https://data.bis.org/topics/DSS/data?data_view=table"]
+topic_tags = ["Debt Security", "Repo"]
+type_of_data_access = "Public"
+data_license = "No"
+license_expiration_date = "N/A"
+need_to_contact_provider = "No"
+provider_contact_info = ""
+restriction_on_use = "No"
+how_is_pulled = "Web API via Python and Pandas"
+path_to_parquet_data = "./_data/bis_debt_securities_cleaned.parquet"
+path_to_excel_data = ""
+date_col = "date"
+dataframe_docs_path = "./docs_src/dataframes/bis_debt_secutities_statistics.md"
 
 
 [charts]
 
+
+[charts.bis_chart]
+chart_name = "Average OBS_VALUE by Sector (Annualized)"
+short_description_chart = "Calculate average OBS_Value by sector"
+dataframe_id = "bis"
+path_to_html_chart = "./_output/obs_value_by_sector.html"
+chart_docs_path = "./docs_src/charts/bis_chart.md"
