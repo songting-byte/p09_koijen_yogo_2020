@@ -1,0 +1,4 @@
+Name,Metadata Complete,Object Type,Identifier,Pipeline,Missing Fields,Page Link
+p09_koijen_yogo_2020,False,pipeline,P0,P0,"build_commands, os_compatibility, git_repo_URL",../index.html
+BIS Debt securities statistics,True,dataframe,bis,P0,,../dataframes/P0/bis.html
+Average OBS_VALUE by Sector (Annualized),False,chart,bis_chart,P0,"topic_tags, data_frequency, observation_period, lag_in_data_release, data_release_timing, units",../charts/P0.bis_chart.html
