@@ -52,3 +52,4 @@ jaydebeapi
 # Bloomberg data access
 xbbg>=0.7.7
 
+## Add chartbook and sphinx_copybutton
