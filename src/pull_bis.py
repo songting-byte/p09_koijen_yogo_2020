@@ -21,6 +21,20 @@ Outputs
     - Written to: `_data/bis_total_debt_all_currency_q.parquet`
     - Includes normalized `million_usd = OBS_VALUE * 10**UNIT_MULT / 1e6`
 
+5) Debt securities statistics from companion NA_SEC flow
+    - Source: `WS_NA_SEC_C3`
+    - Quarterly, all target issuers
+    - Written to: `_data/bis_na_sec_c3_q.parquet`
+    - Includes normalized `million_usd = OBS_VALUE * 10**UNIT_MULT / 1e6`
+
+6) Merged NA_SEC snapshot (WS_NA_SEC_DSS + WS_NA_SEC_C3)
+    - Priority on duplicate keys: WS_NA_SEC_DSS first, then WS_NA_SEC_C3
+    - Written to: `_data/bis_na_sec_merged_q.parquet`
+
+7) Unified three-table stack (DSS/C3/IDS)
+    - Row-wise stack with `FLOW` tag for diagnostics
+    - Written to: `_data/bis_three_tables_merged_q.parquet`
+
 Country coverage
 ----------------
 Targets default to the project's shared 37-country list (see `src/pull_WB.py`)
@@ -37,6 +51,7 @@ Notes
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import pandas as pd
 
@@ -166,23 +181,55 @@ def _bis_v2_csv_url(dataset: str, key: str, *, start_period: str, end_period: st
     )
 
 
+def _read_bis_csv(
+    url: str,
+    *,
+    retries: int = 4,
+    sleep_seconds: float = 1.5,
+    allow_404: bool = False,
+) -> pd.DataFrame:
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return pd.read_csv(url)
+        except Exception as exc:
+            if allow_404 and getattr(exc, "code", None) == 404:
+                return pd.DataFrame()
+            last_err = exc
+            if attempt < retries:
+                time.sleep(sleep_seconds * attempt)
+                continue
+            raise
+
+    if last_err is not None:
+        raise last_err
+    return pd.DataFrame()
+
+
 # --------------------------------------------------------------------------------------
 # Pulls
 # --------------------------------------------------------------------------------------
 
 
-def pull_domestic_debt_securities(*, start_period: str, end_period: str) -> pd.DataFrame:
+def pull_domestic_debt_securities(
+    *,
+    issuer_res_iso2: list[str],
+    start_period: str,
+    end_period: str,
+) -> pd.DataFrame:
     # Keep existing behavior: pull broad slice then filter.
     # Do not hard-code COUNTERPART_AREA=XW at pull stage; some BIS issuers
     # report additional sector coverage under other counterpart areas.
     # WS_NA_SEC_DSS has 18 series dimensions. Keep REF_SECTOR broad and include
     # CUST_BREAKDOWN _T/C01/C02 because some issuers publish only C01/C02.
     # We de-duplicate/standardize CUST in post-processing.
+    issuer_seg = "+".join(sorted(set(issuer_res_iso2)))
+
     key = _build_sdmx_key(
         [
             "",  # FREQ
             "",  # ADJUSTMENT
-            "",  # REF_AREA
+            issuer_seg,  # REF_AREA
             "",  # COUNTERPART_AREA
             "",  # REF_SECTOR
             "",  # COUNTERPART_SECTOR
@@ -201,7 +248,7 @@ def pull_domestic_debt_securities(*, start_period: str, end_period: str) -> pd.D
         ]
     )
     url = _bis_v2_csv_url("WS_NA_SEC_DSS", key, start_period=start_period, end_period=end_period)
-    return pd.read_csv(url)
+    return _read_bis_csv(url)
 
 
 def pull_ids_foreign_currency(
@@ -213,6 +260,8 @@ def pull_ids_foreign_currency(
     """Quarterly IDS positions for foreign-currency group (needed for Appendix C).
 
     Uses MEASURE='I' for amounts outstanding.
+    Pull key is intentionally broad; exact Appendix-C slice is enforced
+    downstream in `main()` via explicit filters.
     """
 
     issuer_seg = "+".join(sorted(set(issuer_res_iso2)))
@@ -228,15 +277,15 @@ def pull_ids_foreign_currency(
             "",  # ISSUER_NAT (wildcard)
             "",  # ISSUER_BUS_IMM (all immediate sector classes)
             "",  # ISSUER_BUS_ULT (all ultimate sector classes)
-            "C",  # MARKET (domestic + international markets: compiled)
-            "A",  # ISSUE_TYPE (all)
+            "",  # MARKET (pull all; filter in main)
+            "",  # ISSUE_TYPE (pull all; filter in main)
             "F",  # ISSUE_CUR_GROUP (foreign currency)
-            "TO1",  # ISSUE_CUR (amounts outstanding)
-            "A+C+K",  # ISSUE_OR_MAT (all/short/long original maturity)
-            "A",  # ISSUE_RE_MAT (all remaining maturity)
-            "A",  # ISSUE_RATE
-            "A",  # ISSUE_RISK
-            "A",  # ISSUE_COL
+            "",  # ISSUE_CUR (pull all; filter in main)
+            "",  # ISSUE_OR_MAT (pull all; filter in main)
+            "",  # ISSUE_RE_MAT (pull all; filter in main)
+            "",  # ISSUE_RATE (pull all; filter in main)
+            "",  # ISSUE_RISK (pull all; filter in main)
+            "",  # ISSUE_COL (pull all; filter in main)
             "I",  # MEASURE (amounts outstanding)
         ]
     )
@@ -247,7 +296,7 @@ def pull_ids_foreign_currency(
         start_period=start_period,
         end_period=end_period,
     )
-    return pd.read_csv(url)
+    return _read_bis_csv(url)
 
 
 def pull_ids_all_currency(
@@ -259,6 +308,8 @@ def pull_ids_all_currency(
     """Quarterly IDS positions across all currency groups (A/D/F).
 
     Uses MEASURE='I' for amounts outstanding.
+    Pull key is intentionally broad; exact Appendix-C slice is enforced
+    downstream in `main()` via explicit filters.
     """
 
     issuer_seg = "+".join(sorted(set(issuer_res_iso2)))
@@ -270,15 +321,15 @@ def pull_ids_all_currency(
             "",  # ISSUER_NAT
             "",  # ISSUER_BUS_IMM
             "",  # ISSUER_BUS_ULT
-            "C",  # MARKET
-            "A",  # ISSUE_TYPE
+            "",  # MARKET (pull all; filter in main)
+            "",  # ISSUE_TYPE (pull all; filter in main)
             "",  # ISSUE_CUR_GROUP (all)
-            "TO1",  # ISSUE_CUR
-            "A+C+K",  # ISSUE_OR_MAT
-            "A",  # ISSUE_RE_MAT
-            "A",  # ISSUE_RATE
-            "A",  # ISSUE_RISK
-            "A",  # ISSUE_COL
+            "",  # ISSUE_CUR (pull all; filter in main)
+            "",  # ISSUE_OR_MAT (pull all; filter in main)
+            "",  # ISSUE_RE_MAT (pull all; filter in main)
+            "",  # ISSUE_RATE (pull all; filter in main)
+            "",  # ISSUE_RISK (pull all; filter in main)
+            "",  # ISSUE_COL (pull all; filter in main)
             "I",  # MEASURE (amounts outstanding)
         ]
     )
@@ -289,7 +340,7 @@ def pull_ids_all_currency(
         start_period=start_period,
         end_period=end_period,
     )
-    return pd.read_csv(url)
+    return _read_bis_csv(url)
 
 
 def pull_total_debt_all_currency(
@@ -303,42 +354,92 @@ def pull_total_debt_all_currency(
     This keeps total-debt output independent from IDS flow.
     """
 
-    issuer_seg = "+".join(sorted(set(issuer_res_iso2)))
+    pieces: list[pd.DataFrame] = []
+    for issuer in sorted(set(issuer_res_iso2)):
+        key = _build_sdmx_key(
+            [
+                "Q",  # FREQ
+                "",  # ADJUSTMENT
+                issuer,  # REF_AREA
+                "",  # COUNTERPART_AREA (all; select preferred counterpart downstream)
+                "",  # REF_SECTOR (wildcard; S1M is sparse for many BIS-source countries)
+                "",  # COUNTERPART_SECTOR
+                "",  # CONSOLIDATION
+                "L",  # ACCOUNTING_ENTRY (liabilities)
+                "LE",  # STO (end-of-period stock)
+                "F3",  # INSTR_ASSET (debt securities)
+                "T+LS+L+S",  # MATURITY (prefer T; fallback LS/L/S when T is absent)
+                "",  # EXPENDITURE
+                "USD",  # UNIT_MEASURE
+                "_T+XDC+USD",  # CURRENCY_DENOM (prefer _T; fallback XDC/USD when needed)
+                "",  # VALUATION
+                "",  # PRICES
+                "",  # TRANSFORMATION
+                "_T+C01+C02",  # CUST_BREAKDOWN
+            ]
+        )
 
-    # WS_NA_SEC_DSS dimension order (NA_SEC):
-    # FREQ.ADJUSTMENT.REF_AREA.COUNTERPART_AREA.REF_SECTOR.COUNTERPART_SECTOR.
-    # CONSOLIDATION.ACCOUNTING_ENTRY.STO.INSTR_ASSET.MATURITY.EXPENDITURE.
-    # UNIT_MEASURE.CURRENCY_DENOM.VALUATION.PRICES.TRANSFORMATION.CUST_BREAKDOWN
-    key = _build_sdmx_key(
-        [
-            "Q",  # FREQ
-            "",  # ADJUSTMENT
-            issuer_seg,  # REF_AREA
-            "",  # COUNTERPART_AREA (all; select preferred counterpart downstream)
-            "",  # REF_SECTOR (wildcard; S1M is sparse for many BIS-source countries)
-            "",  # COUNTERPART_SECTOR
-            "",  # CONSOLIDATION
-            "L",  # ACCOUNTING_ENTRY (liabilities)
-            "LE",  # STO (end-of-period stock)
-            "F3",  # INSTR_ASSET (debt securities)
-            "T",  # MATURITY (total)
-            "",  # EXPENDITURE
-            "USD",  # UNIT_MEASURE
-            "_T",  # CURRENCY_DENOM (all currencies)
-            "",  # VALUATION
-            "",  # PRICES
-            "",  # TRANSFORMATION
-            "_T+C01+C02",  # CUST_BREAKDOWN
-        ]
-    )
+        url = _bis_v2_csv_url(
+            "WS_NA_SEC_DSS",
+            key,
+            start_period=start_period,
+            end_period=end_period,
+        )
+        part = _read_bis_csv(url, allow_404=True)
+        if not part.empty:
+            pieces.append(part)
 
-    url = _bis_v2_csv_url(
-        "WS_NA_SEC_DSS",
-        key,
-        start_period=start_period,
-        end_period=end_period,
-    )
-    return pd.read_csv(url)
+    if not pieces:
+        return pd.DataFrame()
+    return pd.concat(pieces, ignore_index=True)
+
+
+def pull_na_sec_c3(
+    *,
+    issuer_res_iso2: list[str],
+    start_period: str,
+    end_period: str,
+) -> pd.DataFrame:
+    """Quarterly debt securities slice from WS_NA_SEC_C3 (NA_SEC companion flow)."""
+
+    pieces: list[pd.DataFrame] = []
+    for issuer in sorted(set(issuer_res_iso2)):
+        key = _build_sdmx_key(
+            [
+                "Q",  # FREQ
+                "",  # ADJUSTMENT
+                issuer,  # REF_AREA
+                "",  # COUNTERPART_AREA
+                "",  # REF_SECTOR
+                "",  # COUNTERPART_SECTOR
+                "",  # CONSOLIDATION
+                "L",  # ACCOUNTING_ENTRY
+                "LE",  # STO
+                "F3",  # INSTR_ASSET
+                "T+LS+L+S+TT",  # MATURITY
+                "",  # EXPENDITURE
+                "USD",  # UNIT_MEASURE
+                "_T+XDC+USD+X1",  # CURRENCY_DENOM
+                "",  # VALUATION
+                "",  # PRICES
+                "",  # TRANSFORMATION
+                "_T+C01+C02",  # CUST_BREAKDOWN
+            ]
+        )
+
+        url = _bis_v2_csv_url(
+            "WS_NA_SEC_C3",
+            key,
+            start_period=start_period,
+            end_period=end_period,
+        )
+        part = _read_bis_csv(url, allow_404=True)
+        if not part.empty:
+            pieces.append(part)
+
+    if not pieces:
+        return pd.DataFrame()
+    return pd.concat(pieces, ignore_index=True)
 
 
 def _drop_domestic_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -491,6 +592,151 @@ def _prefer_valuation(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _prefer_currency_denom(df: pd.DataFrame) -> pd.DataFrame:
+    """Select preferred CURRENCY_DENOM per NA_SEC key: _T > XDC > USD > X1.
+
+    Normalizes selected rows to CURRENCY_DENOM=_T for downstream compatibility.
+    """
+
+    if "CURRENCY_DENOM" not in df.columns or df.empty:
+        return df
+
+    out = df.copy()
+    priority = {"_T": 0, "XDC": 1, "USD": 2, "X1": 3}
+    out["_ccy_rank"] = out["CURRENCY_DENOM"].astype(str).map(priority).fillna(9)
+
+    key_cols = [
+        c
+        for c in [
+            "FREQ",
+            "ADJUSTMENT",
+            "REF_AREA",
+            "ISSUER_RES",
+            "COUNTERPART_AREA",
+            "REF_SECTOR",
+            "COUNTERPART_SECTOR",
+            "CONSOLIDATION",
+            "ACCOUNTING_ENTRY",
+            "STO",
+            "INSTR_ASSET",
+            "MATURITY",
+            "EXPENDITURE",
+            "UNIT_MEASURE",
+            "VALUATION",
+            "PRICES",
+            "TRANSFORMATION",
+            "TIME_PERIOD",
+        ]
+        if c in out.columns
+    ]
+
+    if not key_cols:
+        out = out.drop(columns=["_ccy_rank"])
+        return out
+
+    out = out.sort_values(key_cols + ["_ccy_rank"])
+    out = out.drop_duplicates(subset=key_cols, keep="first").copy()
+    out["CURRENCY_DENOM"] = "_T"
+    out = out.drop(columns=["_ccy_rank"])
+    return out
+
+
+def _prefer_total_maturity(df: pd.DataFrame) -> pd.DataFrame:
+    """Build a total-maturity NA_SEC slice with fallback priority.
+
+    Priority by key: T > LS > (L+S aggregate) > S > L.
+    Output is normalized to MATURITY=T.
+    """
+
+    if "MATURITY" not in df.columns or df.empty:
+        return df
+
+    out = df.copy()
+    key_cols = [
+        c
+        for c in [
+            "FREQ",
+            "ADJUSTMENT",
+            "REF_AREA",
+            "ISSUER_RES",
+            "COUNTERPART_AREA",
+            "REF_SECTOR",
+            "COUNTERPART_SECTOR",
+            "CONSOLIDATION",
+            "ACCOUNTING_ENTRY",
+            "STO",
+            "INSTR_ASSET",
+            "EXPENDITURE",
+            "UNIT_MEASURE",
+            "CURRENCY_DENOM",
+            "VALUATION",
+            "PRICES",
+            "TRANSFORMATION",
+            "CUST_BREAKDOWN",
+            "TIME_PERIOD",
+        ]
+        if c in out.columns
+    ]
+
+    if not key_cols:
+        return out
+
+    pieces: list[pd.DataFrame] = []
+    for _, g in out.groupby(key_cols, dropna=False):
+        m = g["MATURITY"].astype(str)
+
+        if (m == "T").any():
+            chosen = g[m == "T"].copy()
+            chosen["MATURITY"] = "T"
+            pieces.append(chosen)
+            continue
+
+        if (m == "LS").any():
+            chosen = g[m == "LS"].copy()
+            chosen["MATURITY"] = "T"
+            pieces.append(chosen)
+            continue
+
+        has_l = (m == "L").any()
+        has_s = (m == "S").any()
+        if has_l and has_s:
+            tmp = g[m.isin({"L", "S"})].copy()
+            obs_series = tmp["OBS_VALUE"] if "OBS_VALUE" in tmp.columns else pd.Series(index=tmp.index, dtype=float)
+            unit_mult_series = tmp["UNIT_MULT"] if "UNIT_MULT" in tmp.columns else pd.Series(index=tmp.index, dtype=float)
+            tmp["_obs_num"] = pd.to_numeric(obs_series, errors="coerce")
+            tmp["_um_num"] = pd.to_numeric(unit_mult_series, errors="coerce").fillna(0)
+            tmp["_abs_value"] = tmp["_obs_num"] * (10 ** tmp["_um_num"])
+            total_abs = float(tmp["_abs_value"].sum())
+
+            row = tmp.iloc[[0]].copy()
+            row["OBS_VALUE"] = total_abs
+            row["UNIT_MULT"] = 0
+            row["MATURITY"] = "T"
+            row = row.drop(columns=[c for c in ["_obs_num", "_um_num", "_abs_value"] if c in row.columns])
+            pieces.append(row)
+            continue
+
+        if has_s:
+            chosen = g[m == "S"].copy()
+            chosen["MATURITY"] = "T"
+            pieces.append(chosen)
+            continue
+
+        if has_l:
+            chosen = g[m == "L"].copy()
+            chosen["MATURITY"] = "T"
+            pieces.append(chosen)
+            continue
+
+        chosen = g.iloc[[0]].copy()
+        chosen["MATURITY"] = "T"
+        pieces.append(chosen)
+
+    if not pieces:
+        return out.iloc[0:0].copy()
+    return pd.concat(pieces, ignore_index=True)
+
+
 def main() -> None:
     DATA_DIR.mkdir(exist_ok=True)
 
@@ -498,7 +744,11 @@ def main() -> None:
     print(f"Target issuer countries (ISO2): {len(issuer_nat_iso2)}")
 
     # 1) Domestic debt securities statistics (existing output)
-    df_dom = pull_domestic_debt_securities(start_period=DOMESTIC_START, end_period=DOMESTIC_END)
+    df_dom = pull_domestic_debt_securities(
+        issuer_res_iso2=issuer_nat_iso2,
+        start_period=DOMESTIC_START,
+        end_period=DOMESTIC_END,
+    )
     if "REF_AREA" in df_dom.columns:
         df_dom = df_dom[df_dom["REF_AREA"].isin(set(issuer_nat_iso2))].copy()
 
@@ -532,11 +782,6 @@ def main() -> None:
         "MARKET": "C",
         "ISSUE_TYPE": "A",
         "ISSUE_CUR_GROUP": "F",
-        "ISSUE_CUR": "TO1",
-        "ISSUE_RE_MAT": "A",
-        "ISSUE_RATE": "A",
-        "ISSUE_RISK": "A",
-        "ISSUE_COL": "A",
         "MEASURE": "I",
     }
     for col, val in ids_filters.items():
@@ -576,11 +821,6 @@ def main() -> None:
         "FREQ": "Q",
         "MARKET": "C",
         "ISSUE_TYPE": "A",
-        "ISSUE_CUR": "TO1",
-        "ISSUE_RE_MAT": "A",
-        "ISSUE_RATE": "A",
-        "ISSUE_RISK": "A",
-        "ISSUE_COL": "A",
         "MEASURE": "I",
     }
     for col, val in ids_all_filters.items():
@@ -604,7 +844,7 @@ def main() -> None:
     print("Wrote:", ids_all_out)
     print("IDS all-currency rows:", len(df_ids_all))
 
-    # 4) Total debt securities all-currency slice (MEASURE=I)
+    # 4) Total debt securities all-currency slice (WS_NA_SEC_DSS)
     df_tot = pull_total_debt_all_currency(
         issuer_res_iso2=issuer_nat_iso2,
         start_period=IDS_START,
@@ -620,9 +860,7 @@ def main() -> None:
         "ACCOUNTING_ENTRY": "L",
         "STO": "LE",
         "INSTR_ASSET": "F3",
-        "MATURITY": "T",
         "UNIT_MEASURE": "USD",
-        "CURRENCY_DENOM": "_T",
     }
     for col, val in tot_filters.items():
         if col in df_tot.columns:
@@ -633,11 +871,16 @@ def main() -> None:
         # Normalize naming to preserve downstream compatibility.
         df_tot = df_tot.rename(columns={"REF_AREA": "ISSUER_RES"})
 
+    # Keep an uncollapsed key slice for NA_SEC merge diagnostics.
+    df_tot_key = df_tot.copy()
+
     # Keep country coverage when only C01/C02 are published and harmonize to
     # a preferred one-row-per-key output.
     df_tot = _prefer_cust_breakdown(df_tot)
     df_tot = _normalize_ref_sector_parent(df_tot)
     df_tot = _prefer_valuation(df_tot)
+    df_tot = _prefer_currency_denom(df_tot)
+    df_tot = _prefer_total_maturity(df_tot)
 
     if "ISSUER_RES" in df_tot.columns:
         df_tot = df_tot[df_tot["ISSUER_RES"].astype(str).isin(set(issuer_nat_iso2))].copy()
@@ -654,6 +897,104 @@ def main() -> None:
     df_tot.to_parquet(tot_out, index=False)
     print("Wrote:", tot_out)
     print("Total debt rows:", len(df_tot))
+
+    # 5) NA_SEC companion flow (WS_NA_SEC_C3)
+    df_c3 = pull_na_sec_c3(
+        issuer_res_iso2=issuer_nat_iso2,
+        start_period=IDS_START,
+        end_period=IDS_END,
+    )
+
+    for col in ["OBS_VALUE", "UNIT_MULT"]:
+        if col in df_c3.columns:
+            df_c3[col] = pd.to_numeric(df_c3[col], errors="coerce")
+
+    c3_filters = {
+        "FREQ": "Q",
+        "ACCOUNTING_ENTRY": "L",
+        "STO": "LE",
+        "INSTR_ASSET": "F3",
+        "UNIT_MEASURE": "USD",
+    }
+    for col, val in c3_filters.items():
+        if col in df_c3.columns:
+            df_c3 = df_c3[df_c3[col].astype(str) == val].copy()
+
+    if "REF_AREA" in df_c3.columns:
+        df_c3 = df_c3[df_c3["REF_AREA"].astype(str).isin(set(issuer_nat_iso2))].copy()
+        df_c3 = df_c3.rename(columns={"REF_AREA": "ISSUER_RES"})
+
+    if "UNIT_MULT" not in df_c3.columns:
+        df_c3["UNIT_MULT"] = 0
+    else:
+        df_c3["UNIT_MULT"] = pd.to_numeric(df_c3["UNIT_MULT"], errors="coerce").fillna(0)
+
+    if {"OBS_VALUE", "UNIT_MULT"}.issubset(df_c3.columns):
+        df_c3["million_usd"] = (df_c3["OBS_VALUE"] * (10 ** df_c3["UNIT_MULT"])) / 1e6
+
+    c3_out = DATA_DIR / "bis_na_sec_c3_q.parquet"
+    df_c3.to_parquet(c3_out, index=False)
+    print("Wrote:", c3_out)
+    print("NA_SEC_C3 rows:", len(df_c3))
+
+    # 6) Merge NA_SEC_DSS and NA_SEC_C3 key slices with source priority.
+    df_tot_key = df_tot_key.copy()
+    df_c3_key = df_c3.copy()
+
+    df_tot_key["FLOW"] = "WS_NA_SEC_DSS"
+    df_c3_key["FLOW"] = "WS_NA_SEC_C3"
+    df_tot_key["_flow_priority"] = 0
+    df_c3_key["_flow_priority"] = 1
+
+    na_sec_stack = pd.concat([df_tot_key, df_c3_key], ignore_index=True, sort=False)
+
+    merge_key_cols = [
+        c
+        for c in [
+            "FREQ",
+            "ADJUSTMENT",
+            "ISSUER_RES",
+            "COUNTERPART_AREA",
+            "REF_SECTOR",
+            "COUNTERPART_SECTOR",
+            "CONSOLIDATION",
+            "ACCOUNTING_ENTRY",
+            "STO",
+            "INSTR_ASSET",
+            "MATURITY",
+            "EXPENDITURE",
+            "UNIT_MEASURE",
+            "CURRENCY_DENOM",
+            "VALUATION",
+            "PRICES",
+            "TRANSFORMATION",
+            "CUST_BREAKDOWN",
+            "TIME_PERIOD",
+        ]
+        if c in na_sec_stack.columns
+    ]
+
+    if merge_key_cols:
+        na_sec_stack = na_sec_stack.sort_values(merge_key_cols + ["_flow_priority"]) 
+        na_sec_merged = na_sec_stack.drop_duplicates(subset=merge_key_cols, keep="first").copy()
+    else:
+        na_sec_merged = na_sec_stack.copy()
+
+    na_sec_merged = na_sec_merged.drop(columns=["_flow_priority"], errors="ignore")
+    na_sec_merge_out = DATA_DIR / "bis_na_sec_merged_q.parquet"
+    na_sec_merged.to_parquet(na_sec_merge_out, index=False)
+    print("Wrote:", na_sec_merge_out)
+    print("NA_SEC merged rows:", len(na_sec_merged))
+
+    # 7) Unified three-table stack for diagnostics.
+    ids_stack = df_ids_all.copy()
+    ids_stack["FLOW"] = "WS_DEBT_SEC2_PUB"
+
+    three_stack = pd.concat([na_sec_merged, ids_stack], ignore_index=True, sort=False)
+    three_out = DATA_DIR / "bis_three_tables_merged_q.parquet"
+    three_stack.to_parquet(three_out, index=False)
+    print("Wrote:", three_out)
+    print("Three-table merged rows:", len(three_stack))
 
 
 if __name__ == "__main__":
