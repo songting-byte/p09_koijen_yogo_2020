@@ -12,6 +12,7 @@ Output:
 
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import re
 
 import pandas as pd
 import requests
@@ -30,11 +31,17 @@ OECD_BASE_DATA_URL = config(
         "https://sdmx.oecd.org/public/rest/data/"
         "OECD.SDD.NAD,DSD_NASEC20@DF_T720R_A,1.1/"
         "A..CAN+USA+BEL+DNK+FIN+FRA+DEU+ITA+ISR+NLD+NOR+PRT+ESP+SWE+CHE+GBR+"
-        "BRA+JPN+COL+CZE+GRC+HUN+MEX+POL+KOR+AUT..S1...L+A..F3+F5+F2+F4.."
+        "BRA+JPN+COL+CZE+GRC+HUN+MEX+POL+KOR+AUT..S1...L+A..F3+F5+F51+F519+F2+F4.."
         "XDC......?startPeriod=2003&endPeriod=2020"
     ),
     cast=str,
 )
+
+OECD_TARGET_REF_AREAS = [
+    "CAN", "USA", "AUT", "BEL", "DNK", "FIN", "FRA", "DEU", "ISR", "ITA", "NLD", "NOR", "PRT", "ESP", "SWE", "CHE", "GBR",
+    "AUS", "HKG", "JPN", "NZL", "SGP", "BRA", "CHN", "COL", "CZE", "GRC", "HUN", "IND", "MYS", "MEX", "PHL", "POL", "RUS", "ZAF", "KOR", "THA",
+]
+OECD_REF_AREA_CHUNK_SIZE = config("OECD_REF_AREA_CHUNK_SIZE", default=12, cast=int)
 
 def _parse_base_url(base_url):
     parsed = urlparse(base_url)
@@ -50,6 +57,35 @@ def _parse_base_url(base_url):
 
 def _data_url(flow_ref, key):
     return f"https://sdmx.oecd.org/public/rest/data/{flow_ref}/{key}"
+
+
+def _split_key_parts(key_template: str) -> list[str]:
+    return str(key_template).split(".")
+
+
+def _is_ref_area_token(token: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z]{3}", str(token)))
+
+
+def _guess_ref_area_index(key_parts: list[str]) -> int:
+    candidates: list[tuple[int, int]] = []
+    for i, part in enumerate(key_parts):
+        if not part or part in {"", "_T"}:
+            continue
+        toks = [t for t in str(part).split("+") if t]
+        if len(toks) < 2:
+            continue
+        if all(_is_ref_area_token(t) for t in toks):
+            overlap = len(set(toks).intersection(set(OECD_TARGET_REF_AREAS)))
+            candidates.append((overlap, i))
+    if not candidates:
+        raise ValueError("Unable to infer REF_AREA dimension segment from OECD key template")
+    return sorted(candidates, key=lambda t: (t[0], -t[1]), reverse=True)[0][1]
+
+
+def _chunked(values: list[str], size: int) -> list[list[str]]:
+    size = max(1, int(size))
+    return [values[i : i + size] for i in range(0, len(values), size)]
 
 
 def _get_json(session, url, params):
@@ -120,7 +156,8 @@ def pull_oecd_table_0720(
     end_period=OECD_END_PERIOD,
 ):
     flow_ref, key_template, base_params = _parse_base_url(base_url)
-    key = key_template
+    key_parts = _split_key_parts(key_template)
+    ref_area_idx = _guess_ref_area_index(key_parts)
 
     params = {
         **base_params,
@@ -130,10 +167,29 @@ def pull_oecd_table_0720(
         "format": "jsondata",
     }
 
+    frames = []
+    chunks = _chunked(OECD_TARGET_REF_AREAS, OECD_REF_AREA_CHUNK_SIZE)
     with requests.Session() as session:
-        payload = _get_json(session, _data_url(flow_ref, key), params=params)
+        for chunk in chunks:
+            q_parts = key_parts.copy()
+            q_parts[ref_area_idx] = "+".join(chunk)
+            key = ".".join(q_parts)
+            payload = _get_json(session, _data_url(flow_ref, key), params=params)
+            part = _sdmx_json_to_tidy(payload)
+            if not part.empty:
+                frames.append(part)
 
-    raw_df = _sdmx_json_to_tidy(payload)
+    if not frames:
+        return pd.DataFrame()
+
+    raw_df = pd.concat(frames, ignore_index=True)
+    raw_df = raw_df.drop_duplicates().reset_index(drop=True)
+
+    if "reference_area" in raw_df.columns:
+        pulled = set(raw_df["reference_area"].dropna().astype(str).unique().tolist())
+        missing = sorted(set(OECD_TARGET_REF_AREAS) - pulled)
+        print(f"OECD pull coverage: pulled={len(pulled)} target={len(OECD_TARGET_REF_AREAS)} missing={missing}")
+
     return raw_df
 
 

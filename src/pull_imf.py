@@ -13,6 +13,8 @@ Outputs:
 """
 
 import os
+import csv
+import re
 import time
 import warnings
 import numpy as np
@@ -59,6 +61,7 @@ CORE_REPORTED_CURRENCIES = {"USD", "EUR", "JPY", "GBP", "CHF"}
 CAP_RELAX_MULT = float(os.getenv("PIP_CAP_RELAX_MULT", "1.0"))
 DISABLE_CAP = os.getenv("PIP_DISABLE_CAP", "0") == "1"
 RESERVE_SECTOR_CODE_FILE = os.path.join("_data", "imf_pip_reserve_sector_code.txt")
+RESERVE_SECTOR_MODE = os.getenv("PIP_RESERVE_SECTOR_MODE", "broad").strip().lower()
 
 # Paper's OFC investor list (drop as investors)
 OFC_INVESTORS = {"BMU", "CYM", "GGY", "IRL", "IMN", "JEY", "LUX", "ANT"}  # Netherlands Antilles = ANT
@@ -81,6 +84,17 @@ US_TREASURY_REQUIRED_FILES = {
     "government": "gov_bonds_data_table.csv",
     "equity": "common_stock_data_table.csv",
 }
+
+US_SHC_APPENDIX_FILES = {
+    "st_debt": "shc_app07_2020.csv",
+    "lt_debt": "shc_app08_2020.csv",
+}
+
+US_SHC_DIR_CANDIDATES = [
+    "manual added data",
+    os.path.join("src", "shca2020_appendix"),
+    "data_manual",
+]
 
 RESTATEMENT_MATRICES_PATH = os.path.join("manual added data", "Restatement_Matrices.dta")
 
@@ -297,6 +311,196 @@ def load_reserve_sector_code_from_txt(txt_path: str = RESERVE_SECTOR_CODE_FILE) 
     return None
 
 
+def load_reserve_sector_codes_from_txt(txt_path: str = RESERVE_SECTOR_CODE_FILE) -> List[str]:
+    """
+    Read reserve-sector codes from an external txt file.
+
+    Accepted formats:
+      reserve_sector_code=S121
+      reserve_sector_codes=S121,S122
+    """
+    if not os.path.exists(txt_path):
+        return []
+
+    out: List[str] = []
+    with open(txt_path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if (not line) or line.startswith("#"):
+                continue
+
+            if line.lower().startswith("reserve_sector_codes="):
+                rhs = line.split("=", 1)[1].strip()
+                vals = [x.strip().upper() for x in rhs.split(",") if x.strip()]
+                out.extend(vals)
+            elif line.lower().startswith("reserve_sector_code="):
+                rhs = line.split("=", 1)[1].strip().upper()
+                if rhs:
+                    out.append(rhs)
+
+    dedup = []
+    seen = set()
+    for c in out:
+        if c not in seen:
+            seen.add(c)
+            dedup.append(c)
+    return dedup
+
+
+def _safe_codelist_to_series(flow, key: str) -> pd.Series:
+    if key not in flow.codelist:
+        return pd.Series(dtype="object")
+    s = sdmx.to_pandas(flow.codelist[key])
+    if isinstance(s, pd.DataFrame) and s.shape[1] == 1:
+        s = s.iloc[:, 0]
+    if not isinstance(s, pd.Series):
+        return pd.Series(dtype="object")
+    return s
+
+
+def discover_reserve_sector_candidates() -> List[str]:
+    """
+    Discover plausible reserve-sector investor codes from PIP codelists.
+
+    Priority is central-bank-like sectors first; keyword matches are appended.
+    """
+    flow = get_pip_flow()
+    sector_series = pd.Series(dtype="object")
+    for k in ["CL_PIP_SECTOR", "CL_SECTOR", "CL_REF_SECTOR"]:
+        sector_series = _safe_codelist_to_series(flow, k)
+        if not sector_series.empty:
+            break
+
+    preferred = ["S121", "S122", "S1XA", "S1X", "S1KK"]
+    out: List[str] = []
+    for c in preferred:
+        out.append(c)
+
+    if not sector_series.empty:
+        for code, label in sector_series.items():
+            code_u = str(code).upper()
+            label_s = str(label).lower()
+            if (
+                ("central bank" in label_s)
+                or ("monetary" in label_s)
+                or ("reserve" in label_s)
+            ):
+                out.append(code_u)
+
+    # Remove total-sector aggregate to avoid accidentally pulling all investors.
+    out = [c for c in out if c != SECTOR_TOTAL]
+
+    dedup = []
+    seen = set()
+    for c in out:
+        if c not in seen:
+            seen.add(c)
+            dedup.append(c)
+    return dedup
+
+
+def probe_reserve_sector_codes(
+    sector_codes: List[str],
+    equity_indicator: str,
+    end_year: int,
+) -> pd.DataFrame:
+    """
+    Probe candidate sector codes quickly and keep objective coverage diagnostics.
+    """
+    rows = []
+    if not sector_codes:
+        return pd.DataFrame(columns=["sector_code", "rows", "investors", "issuers", "value_usd"])
+
+    sample_issuer = "USA" if "USA" in ISSUERS else ISSUERS[0]
+    start_year = max(2003, int(end_year) - 2)
+    for code in sector_codes:
+        try:
+            df = pull_bilateral_for_issuer(
+                issuer=sample_issuer,
+                start_year=start_year,
+                end_year=end_year,
+                equity_indicator=equity_indicator,
+                sector_code=code,
+            )
+            dfx = scale_to_usd(df) if not df.empty else df
+            rows.append(
+                {
+                    "sector_code": code,
+                    "rows": int(len(dfx)),
+                    "investors": int(dfx["COUNTRY"].nunique()) if (not dfx.empty and "COUNTRY" in dfx.columns) else 0,
+                    "issuers": int(dfx["COUNTERPART_COUNTRY"].nunique()) if (not dfx.empty and "COUNTERPART_COUNTRY" in dfx.columns) else 0,
+                    "value_usd": float(pd.to_numeric(dfx.get("value_usd", pd.Series(dtype=float)), errors="coerce").sum()) if not dfx.empty else 0.0,
+                }
+            )
+        except Exception as e:
+            rows.append(
+                {
+                    "sector_code": code,
+                    "rows": 0,
+                    "investors": 0,
+                    "issuers": 0,
+                    "value_usd": 0.0,
+                    "error": str(e),
+                }
+            )
+
+    out = pd.DataFrame(rows)
+    if "error" not in out.columns:
+        out["error"] = pd.NA
+    return out.sort_values(["rows", "value_usd"], ascending=False).reset_index(drop=True)
+
+
+def consolidate_reserve_sector_rows(df_reserve: pd.DataFrame) -> pd.DataFrame:
+    """
+    Consolidate reserve pulls across multiple sector codes to avoid double counting.
+
+    Rule:
+    - Preferred source order: S121, then S122, then any other sector code.
+    - For a given (investor, issuer, year, asset), keep the preferred available sector.
+    - This preserves broad coverage while preventing additive overlap between sectors.
+    """
+    if df_reserve.empty:
+        return df_reserve
+    if "reserve_sector_code" not in df_reserve.columns:
+        return df_reserve
+
+    key_cols = ["COUNTRY", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class"]
+    if not set(key_cols).issubset(set(df_reserve.columns)):
+        return df_reserve
+
+    x = df_reserve.copy()
+    x["value_usd"] = pd.to_numeric(x.get("value_usd", pd.Series(dtype=float)), errors="coerce")
+    x["reserve_sector_code"] = x["reserve_sector_code"].astype(str).str.upper()
+
+    # Aggregate within key+sector first.
+    g = (
+        x.groupby(key_cols + ["reserve_sector_code"], as_index=False)["value_usd"]
+        .sum(min_count=1)
+    )
+
+    overlap = g.groupby(key_cols, as_index=False)["reserve_sector_code"].nunique()
+    overlap_n = int((overlap["reserve_sector_code"] > 1).sum())
+
+    rank_map = {"S121": 0, "S122": 1}
+    g["sector_rank"] = g["reserve_sector_code"].map(rank_map).fillna(9).astype(int)
+    g["abs_value"] = pd.to_numeric(g["value_usd"], errors="coerce").abs()
+
+    g = g.sort_values(key_cols + ["sector_rank", "abs_value"], ascending=[True, True, True, True, True, False])
+    kept = g.drop_duplicates(subset=key_cols, keep="first").copy()
+
+    print(
+        "Consolidated reserve sectors (anti-double-count): "
+        f"input_rows={len(df_reserve):,}, key_sector_rows={len(g):,}, output_rows={len(kept):,}, "
+        f"overlap_keys={overlap_n:,}"
+    )
+
+    # Keep a compact, stable schema for downstream aggregation.
+    # Preserve `issuer` for backward compatibility with table notebooks.
+    kept["issuer"] = kept["COUNTERPART_COUNTRY"]
+    keep_cols = ["issuer"] + key_cols + ["reserve_sector_code", "value_usd"]
+    return kept[keep_cols]
+
+
 def resolve_equity_indicators(cl_ind: pd.Series) -> Tuple[str, str]:
     """
     Prefer total equity+fund shares (F5) for CPIS/PIP consistency.
@@ -315,6 +519,13 @@ def resolve_equity_indicators(cl_ind: pd.Series) -> Tuple[str, str]:
         raise RuntimeError("No equity position indicator found in CL_PIP_INDICATOR (expected F5 or F51).")
     if dic is None:
         raise RuntimeError("No equity denomination indicator template found in CL_PIP_INDICATOR (expected F5_DIC or F51_DIC).")
+
+    if pos != "P_F5_P_USD" or dic != "P_F5_DIC_{cur}_P_USD":
+        print(
+            "WARNING: IMF F5 equity indicators are unavailable; "
+            f"falling back to {pos} / {dic}. "
+            "This is a data-availability fallback, not the preferred instruction path."
+        )
 
     return pos, dic
 
@@ -348,6 +559,171 @@ def _find_us_treasury_dir() -> Optional[str]:
     return None
 
 
+def _find_shc_appendix_file(file_name: str) -> Optional[str]:
+    for d in US_SHC_DIR_CANDIDATES:
+        p = os.path.join(d, file_name)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _normalize_country_label(label: str) -> str:
+    s = str(label).upper().strip()
+    # SHC appendix labels often include footnote markers like "(1)".
+    s = re.sub(r"\([^)]*\)", "", s)
+    s = s.replace("&", " AND ")
+    s = re.sub(r"[^A-Z0-9]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _country_name_to_iso3_map() -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+
+    # Start with the Treasury-name map, normalized.
+    for iso3, name in ISO3_TO_US_TREASURY_NAME.items():
+        mapping[_normalize_country_label(name)] = iso3
+
+    # Add explicit aliases seen in SHC appendix labels.
+    mapping.update(
+        {
+            "CHINA MAINLAND": "CHN",
+            "KOREA SOUTH": "KOR",
+            "CZECH REPUBLIC": "CZE",
+            "HONG KONG": "HKG",
+            "UNITED KINGDOM": "GBR",
+        }
+    )
+    return mapping
+
+
+def _read_shc_appendix_country_totals(csv_path: str) -> pd.DataFrame:
+    """
+    Parse SHC appendix CSVs (A7/A8) using raw CSV rows.
+
+    Structure is non-tabular at the top and variable-width in notes,
+    so we intentionally avoid header-based parsing.
+    """
+    if not os.path.exists(csv_path):
+        return pd.DataFrame(columns=["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"])
+
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+
+    if not rows:
+        return pd.DataFrame(columns=["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"])
+
+    # Detect year from preamble line such as "As of End-December 2020".
+    year: Optional[str] = None
+    for r in rows[:25]:
+        text = " ".join([str(x) for x in r if x is not None])
+        m = re.search(r"\b(19\d{2}|20\d{2})\b", text)
+        if m:
+            year = m.group(1)
+            break
+    if year is None:
+        return pd.DataFrame(columns=["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"])
+
+    name_to_iso3 = _country_name_to_iso3_map()
+
+    # Find the start of country rows.
+    header_idx: Optional[int] = None
+    for i, r in enumerate(rows):
+        c0 = (r[0] if len(r) > 0 else "")
+        if str(c0).strip().upper() == "COUNTRY OR REGION OF ISSUER":
+            header_idx = i
+            break
+    if header_idx is None:
+        return pd.DataFrame(columns=["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"])
+
+    out_rows = []
+    for r in rows[header_idx + 1 :]:
+        if not r:
+            continue
+        raw_name = str(r[0]).strip() if len(r) > 0 else ""
+        if not raw_name:
+            continue
+
+        raw_name_upper = raw_name.upper()
+        # Stop before regional totals / notes block.
+        if raw_name_upper in {"TOTAL", "TOTALS BY REGION:"} or raw_name_upper.startswith("TOTAL "):
+            continue
+        if raw_name_upper.startswith("1.") or raw_name_upper.startswith("2."):
+            break
+
+        total_cell = str(r[1]).strip() if len(r) > 1 else ""
+        if (not total_cell) or ("*" in total_cell):
+            continue
+
+        val = pd.to_numeric(total_cell.replace(",", ""), errors="coerce")
+        if pd.isna(val):
+            continue
+
+        iso3 = name_to_iso3.get(_normalize_country_label(raw_name))
+        if iso3 is None:
+            continue
+
+        out_rows.append(
+            {
+                "COUNTERPART_COUNTRY": iso3,
+                "TIME_PERIOD": str(year),
+                "value_million_usd": float(val),
+            }
+        )
+
+    if not out_rows:
+        return pd.DataFrame(columns=["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"])
+
+    return (
+        pd.DataFrame(out_rows)
+        .groupby(["COUNTERPART_COUNTRY", "TIME_PERIOD"], as_index=False)["value_million_usd"]
+        .sum()
+    )
+
+
+def load_us_shc_appendix_holdings(end_year: int) -> pd.DataFrame:
+    """
+    Load USA bilateral holdings from SHC Appendix A7/A8 when available.
+
+    A7 supplies short-term debt totals by issuer; A8 supplies long-term debt totals.
+    These files are annual snapshots (e.g., 2020) and are used to improve strict
+    replication for U.S. investor debt classes.
+    """
+    st_path = _find_shc_appendix_file(US_SHC_APPENDIX_FILES["st_debt"])
+    lt_path = _find_shc_appendix_file(US_SHC_APPENDIX_FILES["lt_debt"])
+
+    frames = []
+
+    if st_path:
+        st = _read_shc_appendix_country_totals(st_path)
+        if not st.empty:
+            st = st[st["TIME_PERIOD"].astype(str).astype(int) <= int(end_year)].copy()
+            st["asset_class"] = "ST_DEBT"
+            frames.append(st)
+
+    if lt_path:
+        lt = _read_shc_appendix_country_totals(lt_path)
+        if not lt.empty:
+            lt = lt[lt["TIME_PERIOD"].astype(str).astype(int) <= int(end_year)].copy()
+            lt["asset_class"] = "LT_DEBT"
+            frames.append(lt)
+
+    if not frames:
+        return pd.DataFrame(columns=["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class", "value_usd"])
+
+    out = pd.concat(frames, ignore_index=True)
+    out["COUNTRY"] = "USA"
+    out["issuer"] = out["COUNTERPART_COUNTRY"]
+    out["TIME_PERIOD"] = out["TIME_PERIOD"].astype(str)
+    out["value_usd"] = pd.to_numeric(out["value_million_usd"], errors="coerce").fillna(0.0) * 1_000_000.0
+
+    out = out[["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class", "value_usd"]].copy()
+    return (
+        out.groupby(["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class"], as_index=False)["value_usd"]
+        .sum()
+    )
+
+
 def _read_us_treasury_nationality_long(csv_path: str) -> pd.DataFrame:
     raw = pd.read_csv(csv_path)
     val_cols = [c for c in raw.columns if c.startswith("market_value_nationality_")]
@@ -374,37 +750,65 @@ def _read_us_treasury_nationality_long(csv_path: str) -> pd.DataFrame:
 def load_us_treasury_holdings(end_year: int) -> pd.DataFrame:
     """
     Load U.S. Treasury nationality estimates (Fed note tables) and return
-    USA investor bilateral holdings for LT_DEBT and EQUITY in USD level values.
+        USA investor bilateral holdings.
+
+        Base source:
+            - Fed-note nationality tables for LT_DEBT and EQUITY.
+
+        Optional strict-replication overlays:
+            - SHC appendix A7 for ST_DEBT.
+            - SHC appendix A8 for LT_DEBT (takes precedence for overlapping keys).
     """
     base = _find_us_treasury_dir()
     if base is None:
-        return pd.DataFrame(columns=["COUNTRY", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class", "value_usd"])
+        out = pd.DataFrame(columns=["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class", "value_usd"])
+    else:
+        corp = _read_us_treasury_nationality_long(os.path.join(base, US_TREASURY_REQUIRED_FILES["corporate"]))
+        govt = _read_us_treasury_nationality_long(os.path.join(base, US_TREASURY_REQUIRED_FILES["government"]))
+        eq = _read_us_treasury_nationality_long(os.path.join(base, US_TREASURY_REQUIRED_FILES["equity"]))
 
-    corp = _read_us_treasury_nationality_long(os.path.join(base, US_TREASURY_REQUIRED_FILES["corporate"]))
-    govt = _read_us_treasury_nationality_long(os.path.join(base, US_TREASURY_REQUIRED_FILES["government"]))
-    eq = _read_us_treasury_nationality_long(os.path.join(base, US_TREASURY_REQUIRED_FILES["equity"]))
+        debt = corp.merge(govt, on=["COUNTERPART_COUNTRY", "TIME_PERIOD"], how="outer", suffixes=("_corp", "_gov"))
+        debt["value_million_usd"] = debt["value_million_usd_corp"].fillna(0.0) + debt["value_million_usd_gov"].fillna(0.0)
+        debt = debt[["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"]].copy()
+        debt["asset_class"] = "LT_DEBT"
 
-    debt = corp.merge(govt, on=["COUNTERPART_COUNTRY", "TIME_PERIOD"], how="outer", suffixes=("_corp", "_gov"))
-    debt["value_million_usd"] = debt["value_million_usd_corp"].fillna(0.0) + debt["value_million_usd_gov"].fillna(0.0)
-    debt = debt[["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"]].copy()
-    debt["asset_class"] = "LT_DEBT"
+        eq = eq[["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"]].copy()
+        eq["asset_class"] = "EQUITY"
 
-    eq = eq[["COUNTERPART_COUNTRY", "TIME_PERIOD", "value_million_usd"]].copy()
-    eq["asset_class"] = "EQUITY"
+        out = pd.concat([debt, eq], ignore_index=True)
+        out["TIME_PERIOD"] = out["TIME_PERIOD"].astype(str)
+        out = out[out["TIME_PERIOD"].str.fullmatch(r"\d{4}", na=False)].copy()
+        out = out[out["TIME_PERIOD"].astype(int) <= int(end_year)].copy()
+        out["COUNTRY"] = "USA"
+        out["issuer"] = out["COUNTERPART_COUNTRY"]
+        out["value_usd"] = pd.to_numeric(out["value_million_usd"], errors="coerce").fillna(0.0) * 1_000_000.0
+        out = out[["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class", "value_usd"]].copy()
 
-    out = pd.concat([debt, eq], ignore_index=True)
-    out["TIME_PERIOD"] = out["TIME_PERIOD"].astype(str)
-    out = out[out["TIME_PERIOD"].str.fullmatch(r"\d{4}", na=False)].copy()
-    out = out[out["TIME_PERIOD"].astype(int) <= int(end_year)].copy()
-    out["COUNTRY"] = "USA"
-    out["issuer"] = out["COUNTERPART_COUNTRY"]
-    out["value_usd"] = pd.to_numeric(out["value_million_usd"], errors="coerce").fillna(0.0) * 1_000_000.0
-    out = out[["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class", "value_usd"]].copy()
+        out = (
+            out.groupby(["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class"], as_index=False)["value_usd"]
+            .sum()
+        )
 
-    return (
-        out.groupby(["COUNTRY", "issuer", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class"], as_index=False)["value_usd"]
-        .sum()
-    )
+    # Overlay SHC appendix debt data when present (strict replication for U.S. debt classes).
+    shc = load_us_shc_appendix_holdings(end_year=end_year)
+    if not shc.empty:
+        key_cols = ["COUNTRY", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class"]
+        shc_keys = shc[key_cols].drop_duplicates()
+
+        marked = out.merge(shc_keys.assign(_drop=1), on=key_cols, how="left")
+        dropped = int(marked["_drop"].notna().sum())
+        out = marked[marked["_drop"].isna()].drop(columns=["_drop"])
+
+        if out.empty:
+            out = shc.copy()
+        else:
+            out = pd.concat([out, shc], ignore_index=True)
+        print(
+            "Loaded SHC appendix overlay for USA debt: "
+            f"rows={len(shc):,}, replaced_rows={dropped:,}"
+        )
+
+    return out
 
 
 def apply_us_treasury_override(df_bilat: pd.DataFrame, us_treasury: pd.DataFrame) -> pd.DataFrame:
@@ -429,9 +833,14 @@ def apply_us_treasury_override(df_bilat: pd.DataFrame, us_treasury: pd.DataFrame
             append[c] = pd.NA
     append = append[merged.columns]
 
-    out = pd.concat([merged, append], ignore_index=True)
+    if merged.empty:
+        out = append.copy()
+    elif append.empty:
+        out = merged.copy()
+    else:
+        out = pd.concat([merged, append], ignore_index=True)
     print(
-        "Applied US Treasury override for USA LT_DEBT/EQUITY: "
+        "Applied US-source override for USA holdings (Treasury/SHC): "
         f"replaced rows={before - len(merged):,}, appended rows={len(append):,}"
     )
     return out
@@ -960,11 +1369,46 @@ def main(out_dir: str = "data", end_year: int = 2020):
     equity_pos_indicator, equity_dic_template = resolve_equity_indicators(cl_ind)
     print(f"Using equity indicators: position={equity_pos_indicator}, denomination_template={equity_dic_template}")
 
-    reserve_sector_code = load_reserve_sector_code_from_txt()
-    if reserve_sector_code:
-        print(f"Using reserve-sector code from txt ({RESERVE_SECTOR_CODE_FILE}): {reserve_sector_code}")
+    reserve_codes_from_txt = load_reserve_sector_codes_from_txt()
+    if reserve_codes_from_txt:
+        reserve_sector_codes = reserve_codes_from_txt
+        print(
+            f"Using reserve-sector code(s) from txt ({RESERVE_SECTOR_CODE_FILE}): "
+            f"{reserve_sector_codes}"
+        )
     else:
-        print(f"No reserve-sector code found in txt ({RESERVE_SECTOR_CODE_FILE}); reserve-sector pull skipped.")
+        candidates = discover_reserve_sector_candidates()
+        probe = probe_reserve_sector_codes(candidates, equity_indicator=equity_pos_indicator, end_year=end_year)
+        nonempty = probe[probe["rows"] > 0].copy()
+        if nonempty.empty:
+            reserve_sector_codes = []
+            print(
+                "Reserve-sector auto-discovery found no non-empty codes; "
+                "reserve-sector pull will be skipped."
+            )
+        else:
+            if RESERVE_SECTOR_MODE == "strict":
+                # Strict mode prioritizes central-bank-only convention.
+                priority = ["S121", "S1XA", "S1X", "S1KK", "S122"]
+                picked = None
+                for c in priority:
+                    if c in set(nonempty["sector_code"].tolist()):
+                        picked = c
+                        break
+                if picked is None:
+                    picked = str(nonempty.iloc[0]["sector_code"])
+                reserve_sector_codes = [picked]
+            else:
+                # Broad mode keeps all non-empty reserve-like sectors to maximize completeness.
+                reserve_sector_codes = nonempty["sector_code"].astype(str).tolist()
+
+            print(
+                "Reserve-sector auto-discovery diagnostics (top):\n"
+                f"{probe.head(10).to_string(index=False)}"
+            )
+            print(
+                f"Reserve-sector mode={RESERVE_SECTOR_MODE}; selected code(s): {reserve_sector_codes}"
+            )
 
     # 1) Pull bilateral for the Table C1 issuers only (ALL investors)
     bilat_parts = []
@@ -976,21 +1420,39 @@ def main(out_dir: str = "data", end_year: int = 2020):
 
     df_bilat = pd.concat(bilat_parts, ignore_index=True)
 
+    # Keep IMF confidentiality aggregate investor rows (non-ISO codes, e.g. TX093)
+    # as a separate reserve aggregate source before ISO filtering.
+    df_bilat_reserve_agg = pd.DataFrame()
+    if "COUNTRY" in df_bilat.columns:
+        ctry_all = df_bilat["COUNTRY"].astype(str).str.upper()
+        noniso_mask = ~ctry_all.str.match(r"^[A-Z]{3}$", na=False)
+        reserve_like_mask = ctry_all.str.match(r"^TX\d+$", na=False)
+        keep_mask = noniso_mask & reserve_like_mask
+        if keep_mask.any():
+            df_bilat_reserve_agg = df_bilat.loc[keep_mask].copy()
+
     # 1b) Pull bilateral for reserve-sector investors only (if IMF codelist is resolvable)
     df_bilat_reserve = pd.DataFrame()
-    if reserve_sector_code:
+    if reserve_sector_codes:
         reserve_parts = []
-        for issuer in ISSUERS:
-            sy = ISSUER_START_YEAR[issuer]
-            print(f"Pulling reserve-sector bilateral for issuer={issuer}, years={sy}-{end_year}, sector={reserve_sector_code} ...")
-            df_i = pull_bilateral_for_issuer(
-                issuer,
-                sy,
-                end_year,
-                equity_indicator=equity_pos_indicator,
-                sector_code=reserve_sector_code,
-            )
-            reserve_parts.append(df_i)
+        for sector_code in reserve_sector_codes:
+            for issuer in ISSUERS:
+                sy = ISSUER_START_YEAR[issuer]
+                print(
+                    f"Pulling reserve-sector bilateral for issuer={issuer}, years={sy}-{end_year}, "
+                    f"sector={sector_code} ..."
+                )
+                df_i = pull_bilateral_for_issuer(
+                    issuer,
+                    sy,
+                    end_year,
+                    equity_indicator=equity_pos_indicator,
+                    sector_code=sector_code,
+                )
+                if not df_i.empty:
+                    df_i = df_i.copy()
+                    df_i["reserve_sector_code"] = sector_code
+                reserve_parts.append(df_i)
         if reserve_parts:
             df_bilat_reserve = pd.concat(reserve_parts, ignore_index=True)
 
@@ -1025,15 +1487,25 @@ def main(out_dir: str = "data", end_year: int = 2020):
 
     # Scale
     df_bilat = scale_to_usd(df_bilat)
+    if not df_bilat_reserve_agg.empty:
+        df_bilat_reserve_agg = scale_to_usd(df_bilat_reserve_agg)
     if not df_bilat_reserve.empty:
         df_bilat_reserve = scale_to_usd(df_bilat_reserve)
 
     # Restate issuer residency -> nationality before currency-cap allocation and before Treasury override.
     df_bilat = apply_gcap_restatement_matrices(df_bilat)
     df_bilat = round_up_holdings_to_reporting_minimum(df_bilat, value_col="value_usd", minimum_usd=1_000.0)
+    if not df_bilat_reserve_agg.empty:
+        # Keep same reporting-minimum handling for confidentiality aggregates.
+        df_bilat_reserve_agg = round_up_holdings_to_reporting_minimum(
+            df_bilat_reserve_agg,
+            value_col="value_usd",
+            minimum_usd=1_000.0,
+        )
     if not df_bilat_reserve.empty:
         df_bilat_reserve = apply_gcap_restatement_matrices(df_bilat_reserve)
         df_bilat_reserve = round_up_holdings_to_reporting_minimum(df_bilat_reserve, value_col="value_usd", minimum_usd=1_000.0)
+        df_bilat_reserve = consolidate_reserve_sector_rows(df_bilat_reserve)
 
     # If Treasury nationality tables exist, override USA LT_DEBT/EQUITY with Treasury values.
     if us_treasury_available:
@@ -1050,15 +1522,32 @@ def main(out_dir: str = "data", end_year: int = 2020):
     if not df_bilat_reserve.empty:
         if "COUNTRY" in df_bilat_reserve.columns:
             df_bilat_reserve = df_bilat_reserve[~df_bilat_reserve["COUNTRY"].isin(exclude_investors)].copy()
-            ctry_r = df_bilat_reserve["COUNTRY"].astype(str).str.upper()
-            valid_country_code_r = ctry_r.str.match(r"^[A-Z]{3}$", na=False)
-            df_bilat_reserve = df_bilat_reserve[valid_country_code_r].copy()
+            # Do NOT force ISO3 on reserve pulls: confidentiality aggregates may use non-ISO investor codes.
+            # Keep all remaining investor codes so reserve totals are not mechanically understated.
 
         reserve_parquet = os.path.join(out_dir, "pip_bilateral_positions_reserve.parquet")
         reserve_csv = os.path.join(out_dir, "pip_bilateral_positions_reserve.csv")
         df_bilat_reserve.to_parquet(reserve_parquet, index=False)
         df_bilat_reserve.to_csv(reserve_csv, index=False)
         print(f"Saved reserve-sector bilateral to:\n  {reserve_parquet}\n  {reserve_csv}")
+
+    # Save confidentiality aggregate reserve investor rows from standard bilateral pulls.
+    if not df_bilat_reserve_agg.empty:
+        reserve_agg_parquet = os.path.join(out_dir, "pip_bilateral_positions_reserve_aggregate.parquet")
+        reserve_agg_csv = os.path.join(out_dir, "pip_bilateral_positions_reserve_aggregate.csv")
+        keep_cols = [
+            c
+            for c in ["issuer", "COUNTRY", "COUNTERPART_COUNTRY", "TIME_PERIOD", "asset_class", "value_usd"]
+            if c in df_bilat_reserve_agg.columns
+        ]
+        df_bilat_reserve_agg = df_bilat_reserve_agg[keep_cols].copy()
+        df_bilat_reserve_agg.to_parquet(reserve_agg_parquet, index=False)
+        df_bilat_reserve_agg.to_csv(reserve_agg_csv, index=False)
+        print(
+            "Saved reserve aggregate (confidentiality investor codes) to:\n"
+            f"  {reserve_agg_parquet}\n"
+            f"  {reserve_agg_csv}"
+        )
 
     # 2) Pull currency aggregates for all investors (COUNTERPART=G001)
     # Pull instruction core buckets plus issuer local currencies so non-core

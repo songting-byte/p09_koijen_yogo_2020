@@ -3,7 +3,7 @@
 Target metrics (from validated dictionary mappings):
 1) 3M interbank rate              -> trdstrm.ecodata.series_value + trdstrm.ecoinfo
 2) 10Y government yield            -> trdstrm.ecodata.series_value + trdstrm.ecoinfo
-3) market equity outstanding       -> trdstrm.ds2numshares.numshrs
+3) market equity outstanding       -> trdstrm.ds2mktval.consolmktval
 4) market-to-book equity           -> trdstrm.ds2indexaddldata.datatypevalue (BP/MSPB)
 5) monthly equity return (USD proxy) -> trdstrm.ds2primqtri.ri + trdstrm.ds2scdqtri.ri
 """
@@ -299,41 +299,41 @@ def _fetch_market_equity_outstanding(db, start_period: str, end_period: str):
             ),
             ranked AS (
                 SELECT
-                    n.infocode,
-                    date_trunc('month', n.eventdate)::date AS month_key,
-                    n.eventdate,
-                    n.numshrs,
-                    MAX(n.eventdate) OVER (
-                        PARTITION BY n.infocode, date_trunc('month', n.eventdate)::date
-                    ) AS max_eventdate
-                FROM trdstrm.ds2numshares n
+                    m.infocode,
+                    date_trunc('month', m.valdate)::date AS month_key,
+                    m.valdate,
+                    m.consolmktval,
+                    MAX(m.valdate) OVER (
+                        PARTITION BY m.infocode, date_trunc('month', m.valdate)::date
+                    ) AS max_valdate
+                FROM trdstrm.ds2mktval m
                 JOIN target_infocodes t
-                  ON t.infocode = n.infocode
-                WHERE n.eventdate BETWEEN %(start)s AND %(end)s
-                  AND n.numshrs IS NOT NULL
+                  ON t.infocode = m.infocode
+                WHERE m.valdate BETWEEN %(start)s AND %(end)s
+                  AND m.consolmktval IS NOT NULL
             ),
             picked AS (
                 SELECT
                     infocode,
-                    eventdate,
-                    AVG(numshrs) AS numshrs
+                    valdate,
+                    AVG(consolmktval) AS consolmktval
                 FROM ranked
-                WHERE eventdate = max_eventdate
-                GROUP BY infocode, eventdate
+                WHERE valdate = max_valdate
+                GROUP BY infocode, valdate
             )
             SELECT
                 'market equity outstanding'::text AS metric,
-                'trdstrm.ds2numshares'::text AS source_table,
+                'trdstrm.ds2mktval'::text AS source_table,
                 p.infocode::text AS entity_id,
-                p.eventdate AS obs_date,
-                p.numshrs AS value,
+                p.valdate AS obs_date,
+                p.consolmktval AS value,
                 NULL::text AS series_code,
-                'Number of Shares Outstanding'::text AS description,
+                'Consolidated market value'::text AS description,
                 NULL::text AS unitcode,
                 NULL::text AS freqcode,
                 NULL::text AS currcode,
-                'numshrs'::text AS value_column,
-                'infocode,eventdate'::text AS key_columns
+                'consolmktval'::text AS value_column,
+                'infocode,valdate'::text AS key_columns
             FROM picked p
         """
         return db.raw_sql(
@@ -350,41 +350,41 @@ def _fetch_market_equity_outstanding(db, start_period: str, end_period: str):
         ranked AS (
             SELECT
                 t.region,
-                n.infocode,
-                date_trunc('month', n.eventdate)::date AS month_key,
-                n.eventdate,
-                n.numshrs,
-                MAX(n.eventdate) OVER (
-                    PARTITION BY n.infocode, date_trunc('month', n.eventdate)::date
-                ) AS max_eventdate
-            FROM trdstrm.ds2numshares n
+                m.infocode,
+                date_trunc('month', m.valdate)::date AS month_key,
+                m.valdate,
+                m.consolmktval,
+                MAX(m.valdate) OVER (
+                    PARTITION BY m.infocode, date_trunc('month', m.valdate)::date
+                ) AS max_valdate
+            FROM trdstrm.ds2mktval m
             JOIN target_infocodes t
-              ON t.infocode = n.infocode
-            WHERE n.eventdate BETWEEN %(start)s AND %(end)s
-              AND n.numshrs IS NOT NULL
+              ON t.infocode = m.infocode
+            WHERE m.valdate BETWEEN %(start)s AND %(end)s
+              AND m.consolmktval IS NOT NULL
         ),
         picked_infocode AS (
             SELECT
                 region,
                 infocode,
                 month_key,
-                AVG(numshrs) AS numshrs
+                AVG(consolmktval) AS consolmktval
             FROM ranked
-            WHERE eventdate = max_eventdate
+            WHERE valdate = max_valdate
             GROUP BY region, infocode, month_key
         )
         SELECT
             'market equity outstanding'::text AS metric,
-            'trdstrm.ds2numshares'::text AS source_table,
+            'trdstrm.ds2mktval'::text AS source_table,
             p.region::text AS entity_id,
             p.month_key AS obs_date,
-            SUM(p.numshrs) AS value,
+            SUM(p.consolmktval) AS value,
             NULL::text AS series_code,
-            'Number of Shares Outstanding (sum over securities in country)'::text AS description,
+            'Consolidated market value (sum over securities in country)'::text AS description,
             NULL::text AS unitcode,
             NULL::text AS freqcode,
             NULL::text AS currcode,
-            'numshrs'::text AS value_column,
+            'consolmktval'::text AS value_column,
             'region,month'::text AS key_columns
         FROM picked_infocode p
         GROUP BY p.region, p.month_key
