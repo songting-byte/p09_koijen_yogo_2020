@@ -240,7 +240,7 @@ def pull_domestic_debt_securities(
             "T+L+LS+S+TT",  # MATURITY
             "",  # EXPENDITURE
             "USD",  # UNIT_MEASURE
-            "X1+XDC+_T",  # CURRENCY_DENOM
+            "_T+XDC+USD+X1",  # CURRENCY_DENOM (widen to avoid country-level gaps)
             "",  # VALUATION
             "",  # PRICES
             "",  # TRANSFORMATION
@@ -368,7 +368,7 @@ def pull_total_debt_all_currency(
                 "L",  # ACCOUNTING_ENTRY (liabilities)
                 "LE",  # STO (end-of-period stock)
                 "F3",  # INSTR_ASSET (debt securities)
-                "T+LS+L+S",  # MATURITY (prefer T; fallback LS/L/S when T is absent)
+                "T+TT+LS+L+S",  # MATURITY (include TT to avoid dropping valid total-like slices)
                 "",  # EXPENDITURE
                 "USD",  # UNIT_MEASURE
                 "_T+XDC+USD",  # CURRENCY_DENOM (prefer _T; fallback XDC/USD when needed)
@@ -644,7 +644,7 @@ def _prefer_currency_denom(df: pd.DataFrame) -> pd.DataFrame:
 def _prefer_total_maturity(df: pd.DataFrame) -> pd.DataFrame:
     """Build a total-maturity NA_SEC slice with fallback priority.
 
-    Priority by key: T > LS > (L+S aggregate) > S > L.
+    Priority by key: T > TT > LS > (L+S aggregate) > S > L.
     Output is normalized to MATURITY=T.
     """
 
@@ -687,6 +687,12 @@ def _prefer_total_maturity(df: pd.DataFrame) -> pd.DataFrame:
 
         if (m == "T").any():
             chosen = g[m == "T"].copy()
+            chosen["MATURITY"] = "T"
+            pieces.append(chosen)
+            continue
+
+        if (m == "TT").any():
+            chosen = g[m == "TT"].copy()
             chosen["MATURITY"] = "T"
             pieces.append(chosen)
             continue
@@ -779,8 +785,6 @@ def main() -> None:
     # Defensive post-filter in case BIS API expands wildcard behavior in the future.
     ids_filters = {
         "FREQ": "Q",
-        "MARKET": "C",
-        "ISSUE_TYPE": "A",
         "ISSUE_CUR_GROUP": "F",
         "MEASURE": "I",
     }
@@ -788,11 +792,15 @@ def main() -> None:
         if col in df_ids.columns:
             df_ids = df_ids[df_ids[col].astype(str) == val].copy()
 
+    # Keep all valid MARKET/ISSUE_TYPE keys to avoid dropping real BIS slices.
+    # WS_DEBT_SEC2_PUB codelists: MARKET={1,A,C}, ISSUE_TYPE={A,C,E,G}.
+    if "MARKET" in df_ids.columns:
+        df_ids = df_ids[df_ids["MARKET"].astype(str).isin({"1", "A", "C"})].copy()
+    if "ISSUE_TYPE" in df_ids.columns:
+        df_ids = df_ids[df_ids["ISSUE_TYPE"].astype(str).isin({"A", "C", "E", "G"})].copy()
+
     if "ISSUER_RES" in df_ids.columns:
         df_ids = df_ids[df_ids["ISSUER_RES"].astype(str).isin(set(issuer_nat_iso2))].copy()
-
-    if "ISSUE_OR_MAT" in df_ids.columns:
-        df_ids = df_ids[df_ids["ISSUE_OR_MAT"].astype(str).isin({"A", "C", "K"})].copy()
 
     # When pulling by ISSUER_RES, ISSUER_NAT can contain various BIS classifications;
     # do not filter it further here.
@@ -819,19 +827,19 @@ def main() -> None:
 
     ids_all_filters = {
         "FREQ": "Q",
-        "MARKET": "C",
-        "ISSUE_TYPE": "A",
         "MEASURE": "I",
     }
     for col, val in ids_all_filters.items():
         if col in df_ids_all.columns:
             df_ids_all = df_ids_all[df_ids_all[col].astype(str) == val].copy()
 
+    if "MARKET" in df_ids_all.columns:
+        df_ids_all = df_ids_all[df_ids_all["MARKET"].astype(str).isin({"1", "A", "C"})].copy()
+    if "ISSUE_TYPE" in df_ids_all.columns:
+        df_ids_all = df_ids_all[df_ids_all["ISSUE_TYPE"].astype(str).isin({"A", "C", "E", "G"})].copy()
+
     if "ISSUER_RES" in df_ids_all.columns:
         df_ids_all = df_ids_all[df_ids_all["ISSUER_RES"].astype(str).isin(set(issuer_nat_iso2))].copy()
-
-    if "ISSUE_OR_MAT" in df_ids_all.columns:
-        df_ids_all = df_ids_all[df_ids_all["ISSUE_OR_MAT"].astype(str).isin({"A", "C", "K"})].copy()
 
     if "ISSUE_CUR_GROUP" in df_ids_all.columns:
         df_ids_all = df_ids_all[df_ids_all["ISSUE_CUR_GROUP"].astype(str).isin({"A", "D", "F"})].copy()
