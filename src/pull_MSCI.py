@@ -81,6 +81,10 @@ MSCI_MARKET_TO_BOOK_SERIES = _config_csv_upper("MSCI_MARKET_TO_BOOK_SERIES", "BP
 if not MSCI_MARKET_TO_BOOK_SERIES:
     MSCI_MARKET_TO_BOOK_SERIES = ("BP",)
 
+# Datastream mnemonic for MSCI USD market value (in millions USD).
+# Matches Stata MSCI.do which loads MSCI "Market Value" in USD then divides by 1e3 → USD billions.
+MSCI_MARKET_VALUE_SERIES = _config_csv_upper("MSCI_MARKET_VALUE_SERIES", "MV")
+
 TARGET_COUNTRIES = [
     "CANADA",
     "UNITED STATES",
@@ -286,112 +290,6 @@ def _fetch_10y_gov_yield(db, start_period: str, end_period: str):
             "OR lower(i.dsmnemonic) LIKE '%%10%%'"
             ")"
         ),
-    )
-
-
-def _fetch_market_equity_outstanding(db, start_period: str, end_period: str):
-    if MSCI_MARKET_EQUITY_LEVEL == "infocode":
-        query = """
-            WITH target_infocodes AS (
-                SELECT DISTINCT cq.infocode
-                FROM trdstrm.ds2ctryqtinfo cq
-                WHERE cq.region IN %(region_codes)s
-            ),
-            ranked AS (
-                SELECT
-                    n.infocode,
-                    date_trunc('month', n.eventdate)::date AS month_key,
-                    n.eventdate,
-                    n.numshrs,
-                    MAX(n.eventdate) OVER (
-                        PARTITION BY n.infocode, date_trunc('month', n.eventdate)::date
-                    ) AS max_eventdate
-                FROM trdstrm.ds2numshares n
-                JOIN target_infocodes t
-                  ON t.infocode = n.infocode
-                WHERE n.eventdate BETWEEN %(start)s AND %(end)s
-                  AND n.numshrs IS NOT NULL
-            ),
-            picked AS (
-                SELECT
-                    infocode,
-                    eventdate,
-                    AVG(numshrs) AS numshrs
-                FROM ranked
-                WHERE eventdate = max_eventdate
-                GROUP BY infocode, eventdate
-            )
-            SELECT
-                'market equity outstanding'::text AS metric,
-                'trdstrm.ds2numshares'::text AS source_table,
-                p.infocode::text AS entity_id,
-                p.eventdate AS obs_date,
-                p.numshrs AS value,
-                NULL::text AS series_code,
-                'Number of Shares Outstanding'::text AS description,
-                NULL::text AS unitcode,
-                NULL::text AS freqcode,
-                NULL::text AS currcode,
-                'numshrs'::text AS value_column,
-                'infocode,eventdate'::text AS key_columns
-            FROM picked p
-        """
-        return db.raw_sql(
-            query,
-            params=_region_period_params(start_period, end_period),
-        )
-
-    query = """
-        WITH target_infocodes AS (
-            SELECT DISTINCT cq.infocode, cq.region
-            FROM trdstrm.ds2ctryqtinfo cq
-            WHERE cq.region IN %(region_codes)s
-        ),
-        ranked AS (
-            SELECT
-                t.region,
-                n.infocode,
-                date_trunc('month', n.eventdate)::date AS month_key,
-                n.eventdate,
-                n.numshrs,
-                MAX(n.eventdate) OVER (
-                    PARTITION BY n.infocode, date_trunc('month', n.eventdate)::date
-                ) AS max_eventdate
-            FROM trdstrm.ds2numshares n
-            JOIN target_infocodes t
-              ON t.infocode = n.infocode
-            WHERE n.eventdate BETWEEN %(start)s AND %(end)s
-              AND n.numshrs IS NOT NULL
-        ),
-        picked_infocode AS (
-            SELECT
-                region,
-                infocode,
-                month_key,
-                AVG(numshrs) AS numshrs
-            FROM ranked
-            WHERE eventdate = max_eventdate
-            GROUP BY region, infocode, month_key
-        )
-        SELECT
-            'market equity outstanding'::text AS metric,
-            'trdstrm.ds2numshares'::text AS source_table,
-            p.region::text AS entity_id,
-            p.month_key AS obs_date,
-            SUM(p.numshrs) AS value,
-            NULL::text AS series_code,
-            'Number of Shares Outstanding (sum over securities in country)'::text AS description,
-            NULL::text AS unitcode,
-            NULL::text AS freqcode,
-            NULL::text AS currcode,
-            'numshrs'::text AS value_column,
-            'region,month'::text AS key_columns
-        FROM picked_infocode p
-        GROUP BY p.region, p.month_key
-    """
-    return db.raw_sql(
-        query,
-        params=_region_period_params(start_period, end_period),
     )
 
 
@@ -737,6 +635,149 @@ def _fetch_monthly_equity_return_proxy(db, start_period: str, end_period: str):
     return pd.concat(frames, ignore_index=True, copy=False)
 
 
+def _fetch_market_equity_value_usd(db, start_period: str, end_period: str):
+    """Pull MSCI USD market value from ds2indexaddldata using datatypemnem='MV'.
+
+    Matches Stata MSCI.do which reads the 'Market Value' sheet of the MSCI Excel
+    (USD values, then divides by 1e3 to get USD billions).
+
+    The previous implementation pulled ds2numshares (number of shares), which is
+    not a USD market value and cannot be compared to the Stata output directly.
+    """
+    mv_series = tuple(MSCI_MARKET_VALUE_SERIES)
+
+    if MSCI_MARKET_EQUITY_LEVEL == "index":
+        query = """
+            WITH target_index AS (
+                SELECT DISTINCT ei.dsindexcode
+                FROM trdstrm.ds2equityindex ei
+                WHERE ei.region IN %(region_codes)s
+                  AND ei.sourcecode = '870'
+                  AND ei.ldb = 'SIF'
+                  AND upper(ei.indexdesc) LIKE '%%MSCI%%'
+            ),
+            ranked AS (
+                SELECT
+                    a.dsindexcode,
+                    a.datatypemnem,
+                    date_trunc('month', a.valuedate)::date AS month_key,
+                    a.valuedate,
+                    a.datatypevalue,
+                    MAX(a.valuedate) OVER (
+                        PARTITION BY a.dsindexcode, a.datatypemnem, date_trunc('month', a.valuedate)::date
+                    ) AS max_valuedate
+                FROM trdstrm.ds2indexaddldata a
+                JOIN target_index t
+                  ON t.dsindexcode = a.dsindexcode
+                WHERE a.datatypemnem IN %(mv_series)s
+                  AND a.valuedate BETWEEN %(start)s AND %(end)s
+                  AND a.datatypevalue IS NOT NULL
+            ),
+            picked AS (
+                SELECT
+                    dsindexcode,
+                    datatypemnem,
+                    valuedate,
+                    AVG(datatypevalue) AS datatypevalue
+                FROM ranked
+                WHERE valuedate = max_valuedate
+                GROUP BY dsindexcode, datatypemnem, valuedate
+            )
+            SELECT
+                'market equity value usd'::text AS metric,
+                'trdstrm.ds2indexaddldata'::text AS source_table,
+                p.dsindexcode::text AS entity_id,
+                p.valuedate AS obs_date,
+                p.datatypevalue AS value,
+                p.datatypemnem AS series_code,
+                'MSCI Market Value (USD, from ds2indexaddldata)'::text AS description,
+                NULL::text AS unitcode,
+                NULL::text AS freqcode,
+                'USD'::text AS currcode,
+                'datatypevalue'::text AS value_column,
+                'dsindexcode,datatypemnem,valuedate'::text AS key_columns
+            FROM picked p
+        """
+        return db.raw_sql(
+            query,
+            params={
+                **_region_period_params(start_period, end_period),
+                "mv_series": mv_series,
+            },
+        )
+
+    # Default: aggregate to country level (matches Stata which keeps one value per country-year)
+    query = """
+        WITH target_index AS (
+            SELECT DISTINCT ei.dsindexcode, ei.region
+            FROM trdstrm.ds2equityindex ei
+            WHERE ei.region IN %(region_codes)s
+              AND ei.sourcecode = '870'
+              AND ei.ldb = 'SIF'
+              AND upper(ei.indexdesc) LIKE '%%MSCI%%'
+        ),
+        ranked AS (
+            SELECT
+                t.region,
+                a.dsindexcode,
+                a.datatypemnem,
+                date_trunc('month', a.valuedate)::date AS month_key,
+                a.valuedate,
+                a.datatypevalue,
+                MAX(a.valuedate) OVER (
+                    PARTITION BY a.dsindexcode, a.datatypemnem, date_trunc('month', a.valuedate)::date
+                ) AS max_valuedate
+            FROM trdstrm.ds2indexaddldata a
+            JOIN target_index t
+              ON t.dsindexcode = a.dsindexcode
+            WHERE a.datatypemnem IN %(mv_series)s
+              AND a.valuedate BETWEEN %(start)s AND %(end)s
+              AND a.datatypevalue IS NOT NULL
+        ),
+        picked_index AS (
+            SELECT
+                region,
+                dsindexcode,
+                datatypemnem,
+                month_key,
+                AVG(datatypevalue) AS datatypevalue
+            FROM ranked
+            WHERE valuedate = max_valuedate
+            GROUP BY region, dsindexcode, datatypemnem, month_key
+        ),
+        aggregated AS (
+            SELECT
+                region,
+                datatypemnem,
+                month_key,
+                SUM(datatypevalue) AS datatypevalue
+            FROM picked_index
+            GROUP BY region, datatypemnem, month_key
+        )
+        SELECT
+            'market equity value usd'::text AS metric,
+            'trdstrm.ds2indexaddldata'::text AS source_table,
+            a.region::text AS entity_id,
+            a.month_key AS obs_date,
+            a.datatypevalue AS value,
+            a.datatypemnem AS series_code,
+            'MSCI Market Value (USD, sum over indices in country)'::text AS description,
+            NULL::text AS unitcode,
+            NULL::text AS freqcode,
+            'USD'::text AS currcode,
+            'datatypevalue'::text AS value_column,
+            'region,datatypemnem,month'::text AS key_columns
+        FROM aggregated a
+    """
+    return db.raw_sql(
+        query,
+        params={
+            **_region_period_params(start_period, end_period),
+            "mv_series": mv_series,
+        },
+    )
+
+
 def pull_needed_msci_data(
     start_period=MSCI_START_PERIOD,
     end_period=MSCI_END_PERIOD,
@@ -751,7 +792,9 @@ def pull_needed_msci_data(
     pull_steps = [
         ("3M interbank rate", _fetch_3m_interbank),
         ("10Y government yield", _fetch_10y_gov_yield),
-        ("market equity outstanding", _fetch_market_equity_outstanding),
+        # Replaced ds2numshares (share count) with ds2indexaddldata MV (USD market value)
+        # to match Stata MSCI.do which reads the 'Market Value' USD sheet directly.
+        ("market equity value usd", _fetch_market_equity_value_usd),
         ("market-to-book equity", _fetch_market_to_book_equity),
         ("monthly equity return proxy", _fetch_monthly_equity_return_proxy),
     ]
@@ -773,6 +816,14 @@ def pull_needed_msci_data(
 
     result = pd.concat(frames, ignore_index=True, copy=False)
     result["obs_date"] = pd.to_datetime(result["obs_date"], errors="coerce")
+
+    # Keep only year-end observations (December) for market value and market-to-book,
+    # matching Stata MSCI.do: "by year country: keep if _n==_N" (last obs per year).
+    year_end_metrics = {"market equity value usd", "market-to-book equity"}
+    mask_year_end = result["metric"].isin(year_end_metrics)
+    mask_december = result["obs_date"].dt.month == 12
+    result = result[~mask_year_end | mask_december].copy()
+
     if MSCI_SORT_OUTPUT:
         result = result.sort_values(["metric", "obs_date"], ascending=[True, False]).reset_index(drop=True)
     return result

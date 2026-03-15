@@ -191,14 +191,24 @@ def target_ref_areas_iso3(country_names: Iterable[str] = TARGET_COUNTRIES) -> li
 WDI_INDICATORS: dict[str, str] = {
     # GDP, current US$: NY.GDP.MKTP.CD
     "gdp_current_usd": "WB_WDI_NY_GDP_MKTP_CD",
+    # GDP, real (LCU): NY.GDP.MKTP.KN
+    "gdp_real_lcu": "WB_WDI_NY_GDP_MKTP_KN",
     # GDP, PPP (current international $): NY.GDP.MKTP.PP.CD
     "gdp_ppp_current_intl_usd": "WB_WDI_NY_GDP_MKTP_PP_CD",
     # GDP per capita, PPP (current international $): NY.GDP.PCAP.PP.CD
     "gdp_per_capita_ppp_current_intl_usd": "WB_WDI_NY_GDP_PCAP_PP_CD",
     # CPI: Consumer price index (2010 = 100): FP.CPI.TOTL
     "cpi": "WB_WDI_FP_CPI_TOTL",
+    # Consumption, nominal (current US$): NE.CON.TOTL.CD
+    "consumption_current_usd": "WB_WDI_NE_CON_TOTL_CD",
+    # Consumption, real (LCU): NE.CON.TOTL.KN
+    "consumption_real_lcu": "WB_WDI_NE_CON_TOTL_KN",
     # PPP conversion factor, GDP (LCU per international $): PA.NUS.PPP
     "ppp_conversion_factor_gdp_lcu_per_intl_usd": "WB_WDI_PA_NUS_PPP",
+    # PPP conversion factor, private consumption (LCU per international $): PA.NUS.PRVT.PP
+    "ppp_conversion_factor_consumption_lcu_per_intl_usd": "WB_WDI_PA_NUS_PRVT_PP",
+    # Population, total: SP.POP.TOTL
+    "population_total": "WB_WDI_SP_POP_TOTL",
 }
 
 WDI_MARKET_CAP_INDICATOR = "WB_WDI_CM_MKT_LCAP_CD"  # verified via trying_WB/searchv2
@@ -517,7 +527,9 @@ def pull_wdi_bundle(
 
     if include_market_cap:
         if market_cap_ref_areas is None:
-            market_cap_countries = oecd_missing_equity_outstanding_ref_areas_iso3()
+            # Pull market cap for all target countries (matches Stata WorldBank.do which
+            # loads CM.MKT.LCAP.CD for all countries, not just OECD-missing ones).
+            market_cap_countries = list(countries_ref_area)
         else:
             market_cap_countries = list(market_cap_ref_areas)
         df_mc = pull_wdi_indicator(

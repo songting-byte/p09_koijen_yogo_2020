@@ -30,8 +30,8 @@ OECD_BASE_DATA_URL = config(
         "https://sdmx.oecd.org/public/rest/data/"
         "OECD.SDD.NAD,DSD_NASEC20@DF_T720R_A,1.1/"
         "A..CAN+USA+BEL+DNK+FIN+FRA+DEU+ITA+ISR+NLD+NOR+PRT+ESP+SWE+CHE+GBR+"
-        "BRA+JPN+COL+CZE+GRC+HUN+MEX+POL+KOR+AUT..S1...L+A..F3+F5+F2+F4.."
-        "XDC......?startPeriod=2003&endPeriod=2020"
+        "BRA+JPN+COL+CZE+GRC+HUN+MEX+POL+KOR+AUT..S1...L..F3+F3S+F3L+F5+F51+F519+F52.."
+        "USD......?startPeriod=2003&endPeriod=2020"
     ),
     cast=str,
 )
