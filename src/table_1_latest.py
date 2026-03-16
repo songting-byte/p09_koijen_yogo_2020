@@ -276,6 +276,57 @@ def _load_bis_dds_amounts(data_dir: Path) -> pd.DataFrame:
     return agg
 
 
+def _load_ids_foreign_amounts(data_dir: Path) -> pd.DataFrame:
+    """
+    Load BIS IDS foreign-currency parquet → (Counterpart_iso3, year, type, ids_foreign_bn).
+
+    Used to subtract from DDS / OECD T720 totals to get local-currency amounts.
+    UNIT_MULT=6 → USD millions; convert to billions.
+    Keeps only Q4 observations.
+    Maps ISSUE_OR_MAT: C→ST(1), K→LT(2).
+    """
+    path = data_dir / "bis_ids_foreign_q.parquet"
+    if not path.exists():
+        return pd.DataFrame(columns=["Counterpart", "year", "type", "ids_foreign"])
+
+    df = pd.read_parquet(path)
+
+    time_col = next((c for c in ["TIME_PERIOD", "time_period"] if c in df.columns), None)
+    res_col  = next((c for c in ["ISSUER_RES", "issuer_res"] if c in df.columns), None)
+    mat_col  = next((c for c in ["ISSUE_OR_MAT", "issue_or_mat"] if c in df.columns), None)
+    obs_col  = next((c for c in ["OBS_VALUE", "obs_value"] if c in df.columns), None)
+    unit_col = next((c for c in ["UNIT_MULT", "unit_mult"] if c in df.columns), None)
+
+    if any(c is None for c in [time_col, res_col, mat_col, obs_col]):
+        return pd.DataFrame(columns=["Counterpart", "year", "type", "ids_foreign"])
+
+    df = df[df[time_col].astype(str).str.endswith("Q4")].copy()
+    df["year"] = df[time_col].astype(str).str[:4].astype(int)
+
+    mat_map = {"C": 1, "K": 2}
+    df["type"] = df[mat_col].map(mat_map)
+    df = df.dropna(subset=["type"]).copy()
+    df["type"] = df["type"].astype(int)
+
+    df["Counterpart"] = df[res_col].astype(str).str.upper().map(ISO2_TO_ISO3)
+
+    df["obs"] = pd.to_numeric(df[obs_col], errors="coerce")
+    if unit_col is not None:
+        df["umult"] = pd.to_numeric(df[unit_col], errors="coerce").fillna(6)
+    else:
+        df["umult"] = 6.0
+    # UNIT_MULT=6 → millions → divide by 1000 for billions
+    df["ids_foreign"] = df["obs"] * (10.0 ** (df["umult"] - 9.0))
+
+    agg = (
+        df.dropna(subset=["Counterpart", "year", "type", "ids_foreign"])
+          .query("ids_foreign >= 0")
+          .groupby(["Counterpart", "year", "type"], as_index=False)["ids_foreign"]
+          .sum()
+    )
+    return agg
+
+
 def _load_wb_equity(data_dir: Path) -> pd.DataFrame:
     """
     Load World Bank market-cap parquet → (Counterpart_iso3, year, outstand_bn).
@@ -479,6 +530,7 @@ def build_amounts_latest(
     countries: pd.DataFrame,
     year: int,
     data_dir: Path = DATA_DIR,
+    local_currency_only: bool = True,
 ) -> pd.DataFrame:
     """
     Build amounts outstanding for a given year from API parquets.
@@ -499,6 +551,19 @@ def build_amounts_latest(
     # ── BIS amounts (fallback for non-OECD, and check for OECD too) ──────────
     bis = _load_bis_dds_amounts(data_dir)
     bis_y = bis[bis["year"] == year] if not bis.empty else pd.DataFrame()
+
+    # ── IDS foreign-currency correction (BIS WS_DEBT_SEC2_PUB) ──────────────
+    # Subtract international bonds issued in foreign currency from total debt amounts
+    # to get local-currency-only amounts outstanding (matching Table 1 methodology).
+    # Skip this correction when local_currency_only=False (e.g. for Table 2 top-investor
+    # calculation where total portfolio value is needed, not just domestic-currency bonds).
+    ids_f_lookup: dict[tuple[str, int], float] = {}
+    if local_currency_only:
+        ids_f = _load_ids_foreign_amounts(data_dir)
+        ids_f_y = ids_f[ids_f["year"] == year] if not ids_f.empty else pd.DataFrame()
+        if not ids_f_y.empty:
+            for _, r in ids_f_y.iterrows():
+                ids_f_lookup[(str(r["Counterpart"]), int(r["type"]))] = float(r["ids_foreign"])
 
     # ── World Bank equity ────────────────────────────────────────────────────
     wb = _load_wb_equity(data_dir)
@@ -521,7 +586,17 @@ def build_amounts_latest(
             row = src[(src["Counterpart"] == ctry) & (src["type"] == tp)]
             if row.empty:
                 continue
-            parts.append(row[["Counterpart", "year", "type", "outstand"]])
+
+            # For debt types, subtract IDS foreign-currency to get local-currency amount
+            if tp in [1, 2]:
+                raw = row[["Counterpart", "year", "type", "outstand"]].copy()
+                foreign_adj = ids_f_lookup.get((ctry, tp), 0.0)
+                if foreign_adj > 0:
+                    raw = raw.copy()
+                    raw["outstand"] = (raw["outstand"] - foreign_adj).clip(lower=SMALL)
+                parts.append(raw)
+            else:
+                parts.append(row[["Counterpart", "year", "type", "outstand"]])
 
     if not parts:
         return pd.DataFrame(columns=["Counterpart", "year", "type", "outstand"])

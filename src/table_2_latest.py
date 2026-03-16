@@ -99,7 +99,7 @@ def compute_table2_latest(
 
     # ── Own holdings: imputed from amounts outstanding ────────────────────────
     # For each issuer country: own = max(amounts - Σ foreign_inflows, ε)
-    amounts = build_amounts_latest(countries, year, data_dir)
+    amounts = build_amounts_latest(countries, year, data_dir, local_currency_only=False)
     amounts_y = amounts[amounts["year"] == year][["Counterpart", "type", "outstand"]].copy()
 
     foreign_in = (

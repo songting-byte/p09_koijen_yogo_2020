@@ -273,29 +273,73 @@ def pull_total_debt_securities(
     )
 
 
+def pull_ids_foreign_currency(
+    *,
+    issuer_res_iso2: list[str],
+    start_period: str,
+    end_period: str,
+) -> pd.DataFrame:
+    """Quarterly IDS foreign-currency amounts from WS_DEBT_SEC2_PUB (v2 API).
+
+    Returns the face value of international bonds issued in foreign currency by
+    residents of each target country.  Used to correct BIS DDS / OECD T720 totals
+    (which include all currencies) to obtain local-currency-only amounts outstanding.
+
+    Key dimensions used:
+      FREQ           = Q
+      ISSUER_RES     = {iso2}   (issuing country — resident basis)
+      ISSUER_NAT     = 3P       (aggregate nationality, only value available)
+      ISSUER_BUS_IMM = 1        (all immediate parents)
+      ISSUER_BUS_ULT = 1        (all ultimate parents)
+      MARKET         = C        (international / cross-border market)
+      ISSUE_TYPE     = A        (all types)
+      ISSUE_CUR_GROUP= F        (foreign-currency bonds only)
+      ISSUE_CUR      = TO1      (all non-domestic currencies aggregate)
+      ISSUE_OR_MAT   = C+K      (short-term C, long-term K)
+      ISSUE_RE_MAT   = A
+      ISSUE_RATE     = A
+      ISSUE_RISK     = A
+      ISSUE_COL      = A
+      MEASURE        = I        (amounts outstanding)
+
+    UNIT_MULT=6 in the response → values are USD millions.
+
+    Output columns: ISSUER_RES (ISO2), ISSUE_OR_MAT (C=ST, K=LT),
+                    TIME_PERIOD, OBS_VALUE (USD millions).
+    """
+    rows: list[pd.DataFrame] = []
+    for iso2 in issuer_res_iso2:
+        key = f"Q.{iso2}.3P.1.1.C.A.F.TO1.C+K.A.A.A.A.I"
+        url = (
+            f"https://stats.bis.org/api/v2/data/dataflow/BIS/WS_DEBT_SEC2_PUB/1.0/{key}"
+            f"?startPeriod={start_period}&endPeriod={end_period}&format=csv"
+        )
+        try:
+            df = pd.read_csv(url)
+            if df.empty:
+                continue
+            keep = ["ISSUER_RES", "ISSUE_OR_MAT", "TIME_PERIOD", "OBS_VALUE", "UNIT_MULT"]
+            df = df[[c for c in keep if c in df.columns]].copy()
+            if "UNIT_MULT" not in df.columns:
+                df["UNIT_MULT"] = 6
+            rows.append(df)
+        except Exception:
+            continue  # skip countries where IDS data is unavailable
+
+    if not rows:
+        return pd.DataFrame(columns=["ISSUER_RES", "ISSUE_OR_MAT", "TIME_PERIOD",
+                                     "OBS_VALUE", "UNIT_MULT"])
+    return pd.concat(rows, ignore_index=True)
+
+
 def pull_ids(
     *,
     start_period: str = "",   # noqa: unused — kept for API compatibility
     end_period: str = "",     # noqa: unused — kept for API compatibility
 ) -> pd.DataFrame:
-    """Quarterly international debt securities from WS_DEBT_SEC2_PUB.
+    """Deprecated stub — use pull_ids_foreign_currency instead.
 
-    Matches Stata BIS.do Step 3:
-      ISSUER_NAT == 3P               (all countries excluding residents)
-      ISSUER_BUS_IMM == 1            (all issuers)
-      ISSUER_BUS_ULT == 1            (all issuers)
-      market == C                    (international markets)
-      ISSUE_CUR_GROUP in {A, D, F}   (all, domestic, foreign currency)
-      ISSUE_RE_MAT == A              (all remaining maturities)
-      ISSUE_RATE == A                (all rate types)
-      measure == I                   (amounts outstanding)
-
-    ISSUER_RES is left as a wildcard so all resident countries are returned;
-    filter to your target country list after loading.
-
-    WS_DEBT_SEC2_PUB (which this used) no longer exists.
-    Returns an empty DataFrame so callers don't crash; IDS data is not
-    critical for table_1_latest.py (it uses CPIS bilateral instead).
+    Returns an empty DataFrame so legacy callers don't crash.
     """
     return pd.DataFrame()
 
@@ -317,6 +361,18 @@ def main() -> None:
     df_dom.to_parquet(domestic_out, index=False)
     print("Wrote:", domestic_out)
     print(f"DDS rows: {len(df_dom)}  countries: {df_dom['REF_AREA'].nunique() if not df_dom.empty else 0}")
+
+    # IDS foreign-currency slice via WS_DEBT_SEC2_PUB (v2)
+    # Used to correct DDS / OECD T720 totals to local-currency-only amounts.
+    df_ids = pull_ids_foreign_currency(
+        issuer_res_iso2=issuer_res_iso2,
+        start_period=IDS_START,
+        end_period=IDS_END,
+    )
+    ids_out = DATA_DIR / "bis_ids_foreign_q.parquet"
+    df_ids.to_parquet(ids_out, index=False)
+    print("Wrote:", ids_out)
+    print(f"IDS rows: {len(df_ids)}  countries: {df_ids['ISSUER_RES'].nunique() if not df_ids.empty else 0}")
 
 
 if __name__ == "__main__":
