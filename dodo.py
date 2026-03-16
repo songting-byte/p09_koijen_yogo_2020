@@ -213,6 +213,11 @@ notebook_tasks = {
         "file_dep": [],
         "targets": [],
     },
+    "koijen_yogo_2020_tour_ipynb": {
+        "path": "./src/koijen_yogo_2020_tour_ipynb.py",
+        "file_dep": ["./src/table_1.py", "./src/table_2.py"],
+        "targets": [OUTPUT_DIR / "table_1.txt", OUTPUT_DIR / "table_2.txt"],
+    },
 }
 
 
