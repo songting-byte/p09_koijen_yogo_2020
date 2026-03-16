@@ -17,11 +17,11 @@ import pandas as pd
 import pytest
 
 # ── Make src importable ──────────────────────────────────────────────────────
-SRC = Path(__file__).parent.parent / "src"
+SRC = Path(__file__).parent
 sys.path.insert(0, str(SRC))
 
-from table_1 import _read, build_data2, build_data3          # noqa: E402
-from table_2 import compute_table2                            # noqa: E402
+from table_1_latest import _load_countries, DATA_DIR  # noqa: E402
+from table_2_latest import compute_table2_latest       # noqa: E402
 
 # ── Ground truth from Koijen & Yogo (2020), Table 2 ─────────────────────────
 # Format: {(investor_name, asset_type): amount_billion_usd}
@@ -71,11 +71,9 @@ AMOUNT_THRESHOLD_PCT = 10.0
 # ── Session-scoped fixture: build the table once for all tests ───────────────
 @pytest.fixture(scope="session")
 def table2() -> dict[int, pd.DataFrame]:
-    """Run the full pipeline and return the computed Table 2 dict."""
-    ctry  = _read("Countries.dta")
-    data2 = build_data2(ctry)
-    data3 = build_data3(ctry, data2)
-    return compute_table2(data3, ctry)
+    """Run the full pipeline (year=2020) and return the computed Table 2 dict."""
+    countries = _load_countries()
+    return compute_table2_latest(2020, countries, DATA_DIR)
 
 
 @pytest.fixture(scope="session")
@@ -84,7 +82,7 @@ def lookup(table2: dict[int, pd.DataFrame]) -> dict[tuple[str, int], float]:
     result: dict[tuple[str, int], float] = {}
     for tp, df in table2.items():
         for _, row in df.iterrows():
-            result[(row["investor"], int(tp))] = float(row["amount"])
+            result[(row["Investor"], int(tp))] = float(row["value_bn"])
     return result
 
 

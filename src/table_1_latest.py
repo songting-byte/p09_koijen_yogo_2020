@@ -36,8 +36,6 @@ DATA_DIR   = Path(__file__).parent.parent / "_data"
 OUTPUT_DIR = Path(__file__).parent.parent / "_output"
 SMALL      = 1e-6
 
-# Path to dataverse Countries.dta for country metadata (static, doesn't change)
-_DATAVERSE = Path(__file__).parent.parent.parent / "dataverse_files (1)" / "Code" / "1 Data"
 
 # ── Type / instrument mappings ────────────────────────────────────────────────
 OECD_INSTR_TO_TYPE: dict[str, int] = {
@@ -60,7 +58,7 @@ IMF_ASSET_CLASS_TO_TYPE: dict[str, int] = {
 
 # ISO2 → ISO3 for BIS issuer codes (same mapping as pull_bis.py, reversed)
 ISO2_TO_ISO3: dict[str, str] = {
-    "AU": "AUS", "AT": "AT", "BE": "BEL", "BR": "BRA", "CA": "CAN",
+    "AU": "AUS", "AT": "AUT", "BE": "BEL", "BR": "BRA", "CA": "CAN",
     "CH": "CHE", "CN": "CHN", "CO": "COL", "CZ": "CZE", "DE": "DEU",
     "DK": "DNK", "ES": "ESP", "FI": "FIN", "FR": "FRA", "GB": "GBR",
     "GR": "GRC", "HK": "HKG", "HU": "HUN", "IL": "ISR", "IN": "IND",
@@ -101,16 +99,9 @@ OECD_MEMBERS_ISO3 = {
 
 def _load_countries() -> pd.DataFrame:
     """
-    Load the static Countries.dta from the dataverse if available, else use
-    a hardcoded fallback covering the 33 paper countries.
+    Return country metadata covering the 33 paper countries.
     """
-    dta_path = _DATAVERSE / "Countries.dta"
-    if dta_path.exists():
-        ctry = pd.read_stata(dta_path)
-        ctry["group"] = ctry["MSCI"].astype(str).map(MSCI_GROUP)
-        return ctry
-
-    # Hardcoded fallback: (Counterpart, Name, MSCI_group)
+    # (Counterpart, Name, MSCI_group)
     rows = [
         # DM: Americas (group=1)
         ("CAN", "Canada",          1), ("USA", "United States",   1),
@@ -130,12 +121,12 @@ def _load_countries() -> pd.DataFrame:
         ("SGP", "Singapore",       3),
         # EM (group=4)
         ("BRA", "Brazil",          4), ("CHN", "China",           4),
-        ("COL", "Colombia",        4), ("HUN", "Hungary",         4),
-        ("IND", "India",           4), ("KOR", "Korea",           4),
-        ("MEX", "Mexico",          4), ("MYS", "Malaysia",        4),
-        ("PHL", "Philippines",     4), ("POL", "Poland",          4),
-        ("RUS", "Russia",          4), ("THA", "Thailand",        4),
-        ("ZAF", "South Africa",    4),
+        ("COL", "Colombia",        4), ("CZE", "Czech Republic",  4),
+        ("HUN", "Hungary",         4), ("IND", "India",           4),
+        ("KOR", "South Korea",     4), ("MEX", "Mexico",          4),
+        ("MYS", "Malaysia",        4), ("PHL", "Philippines",     4),
+        ("POL", "Poland",          4), ("RUS", "Russia",          4),
+        ("THA", "Thailand",        4), ("ZAF", "South Africa",    4),
     ]
     ctry = pd.DataFrame(rows, columns=["Counterpart", "Name", "group"])
     return ctry
@@ -165,7 +156,7 @@ def _load_oecd_amounts(data_dir: Path) -> pd.DataFrame:
     df = pd.read_parquet(path)
 
     # Keep only instruments we need
-    df = df[df["financial_instrument"].isin(OECD_INSTR_TO_TYPE)].copy()
+    df = df[df["financial_instrument"].isin(["F3", "F3S", "F3L", "F5", "F51"])].copy()
 
     # Filter sector S1 (total economy), liabilities (accounting_entry=L or blank)
     if "sector" in df.columns:
@@ -177,16 +168,51 @@ def _load_oecd_amounts(data_dir: Path) -> pd.DataFrame:
     if "original_maturity" in df.columns:
         df = df[~df["original_maturity"].isin(["T"])].copy()
 
-    df["type"]         = df["financial_instrument"].map(OECD_INSTR_TO_TYPE)
+    # Assign type: F3 debt split by maturity S→1, L→2; F3S→1, F3L→2; F5/F51→3
+    def _assign_type(row):
+        instr = row["financial_instrument"]
+        mat   = row.get("original_maturity", "_Z") if "original_maturity" in row.index else "_Z"
+        if instr in ("F5", "F51"):
+            return 3
+        if instr == "F3S":
+            return 1
+        if instr == "F3L":
+            return 2
+        if instr == "F3":
+            if mat == "S":
+                return 1
+            if mat == "L":
+                return 2
+        return None
+
+    df["type"] = df.apply(_assign_type, axis=1)
     df["year"]         = pd.to_numeric(df["time_period"], errors="coerce").astype("Int64")
     df["Counterpart"]  = df["reference_area"].astype(str).str.upper()
     df["outstand"]     = pd.to_numeric(df["value"], errors="coerce") / 1000.0  # millions → billions
 
+    df_clean = df.dropna(subset=["Counterpart", "year", "type", "outstand"]).query("outstand > 0")
+
+    # For equity (type=3): prefer F51 (equity shares) over F5 (equity + fund shares)
+    # per country-year to avoid including investment fund shares.
+    eq_mask = df_clean["type"] == 3
+    eq = df_clean[eq_mask].copy()
+    non_eq = df_clean[~eq_mask].copy()
+
+    if not eq.empty and "F51" in eq["financial_instrument"].values:
+        ctry_year_f51 = set(
+            eq[eq["financial_instrument"] == "F51"]
+            .apply(lambda r: (r["Counterpart"], r["year"]), axis=1)
+        )
+        eq = eq[~(
+            (eq["financial_instrument"] == "F5") &
+            eq.apply(lambda r: (r["Counterpart"], r["year"]) in ctry_year_f51, axis=1)
+        )].copy()
+
+    df_clean = pd.concat([non_eq, eq], ignore_index=True)
     agg = (
-        df.dropna(subset=["Counterpart", "year", "type", "outstand"])
-          .query("outstand > 0")
-          .groupby(["Counterpart", "year", "type"], as_index=False)["outstand"]
-          .sum()
+        df_clean
+        .groupby(["Counterpart", "year", "type"], as_index=False)["outstand"]
+        .sum()
     )
     return agg
 
@@ -273,9 +299,19 @@ def _load_wb_equity(data_dir: Path) -> pd.DataFrame:
     if area_col is None or time_col is None or val_col is None:
         return pd.DataFrame(columns=["Counterpart", "year", "outstand"])
 
-    # Filter for market cap indicator if indicator column exists
-    if ind_col is not None:
-        mktcap_codes = {"CM.MKT.LCAP.CD", "MKTCAP", "market_cap"}
+    # Filter for market cap indicator — try metric column first, then indicator column
+    metric_col = next((c for c in ["metric", "METRIC"] if c in df.columns), None)
+    mktcap_codes = {
+        "CM.MKT.LCAP.CD", "MKTCAP", "market_cap",
+        "WB_WDI_CM_MKT_LCAP_CD", "market_cap_listed_domestic_companies_current_usd",
+    }
+    filtered = False
+    if metric_col is not None:
+        mask = df[metric_col].astype(str).isin(mktcap_codes)
+        if mask.any():
+            df = df[mask].copy()
+            filtered = True
+    if not filtered and ind_col is not None:
         mask = df[ind_col].astype(str).isin(mktcap_codes)
         if mask.any():
             df = df[mask].copy()

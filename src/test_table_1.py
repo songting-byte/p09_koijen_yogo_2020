@@ -17,10 +17,16 @@ import pandas as pd
 import pytest
 
 # ── Make src importable ──────────────────────────────────────────────────────
-SRC = Path(__file__).parent.parent / "src"
+SRC = Path(__file__).parent
 sys.path.insert(0, str(SRC))
 
-from table_1 import _read, build_data2, build_data3, compute_table1  # noqa: E402
+from table_1_latest import (  # noqa: E402
+    _load_countries,
+    build_amounts_latest,
+    build_holdings_latest,
+    compute_table1_latest,
+    DATA_DIR,
+)
 
 # ── Ground truth from Summary0.smcl (Stata log, run Oct 31 2025) ─────────────
 # Format: {(name, type): (market, domestic, reserve)}
@@ -148,11 +154,11 @@ MARKET_THRESHOLD_PCT = 10.0   # |%error| must be below this
 # ── Session-scoped fixture: build the table once for all tests ───────────────
 @pytest.fixture(scope="session")
 def table1() -> pd.DataFrame:
-    """Run the full pipeline and return the computed Table 1 DataFrame."""
-    ctry = _read("Countries.dta")
-    data2 = build_data2(ctry)
-    data3 = build_data3(ctry, data2)
-    return compute_table1(data3, ctry)
+    """Run the full pipeline (year=2020) and return the computed Table 1 DataFrame."""
+    countries = _load_countries()
+    amounts   = build_amounts_latest(countries, 2020, DATA_DIR)
+    holdings  = build_holdings_latest(amounts, 2020, DATA_DIR)
+    return compute_table1_latest(holdings, amounts, countries, 2020)
 
 
 @pytest.fixture(scope="session")

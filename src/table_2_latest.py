@@ -24,6 +24,7 @@ from table_1_latest import (
     IMF_ASSET_CLASS_TO_TYPE,
     _load_countries,
     detect_latest_year,
+    build_amounts_latest,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,6 +53,9 @@ def compute_table2_latest(
     """
     Build top-10 investors per asset class for a given year.
 
+    Total holdings = domestic (own) holdings + cross-border (CPIS) holdings.
+    Domestic holdings are imputed as: amounts_outstanding − Σ foreign_held.
+
     Returns: {type: DataFrame(rank, investor_name, value_bn)}
     """
     path = data_dir / "pip_bilateral_positions.parquet"
@@ -61,18 +65,21 @@ def compute_table2_latest(
 
     df = pd.read_parquet(path)
 
-    investor_col = next((c for c in ["COUNTRY", "country", "investor"] if c in df.columns), None)
-    time_col     = next((c for c in ["TIME_PERIOD", "time_period", "year"] if c in df.columns), None)
-    asset_col    = next((c for c in ["asset_class", "ASSET_CLASS"] if c in df.columns), None)
-    val_col      = next((c for c in ["value_usd", "value", "VALUE_USD"] if c in df.columns), None)
+    investor_col    = next((c for c in ["COUNTRY", "country", "investor"] if c in df.columns), None)
+    counterpart_col = next((c for c in ["COUNTERPART_COUNTRY", "counterpart_country",
+                                         "COUNTERPART", "counterpart"] if c in df.columns), None)
+    time_col        = next((c for c in ["TIME_PERIOD", "time_period", "year"] if c in df.columns), None)
+    asset_col       = next((c for c in ["asset_class", "ASSET_CLASS"] if c in df.columns), None)
+    val_col         = next((c for c in ["value", "VALUE_USD", "value_usd"] if c in df.columns), None)
 
     if any(c is None for c in [investor_col, time_col, val_col]):
         print(f"  Missing columns in bilateral parquet. Found: {list(df.columns)}")
         return {}
 
-    df["investor"] = df[investor_col].astype(str).str.upper()
-    df["year"]     = pd.to_numeric(df[time_col], errors="coerce").astype("Int64")
-    df["value"]    = pd.to_numeric(df[val_col], errors="coerce") / 1000.0   # millions → billions
+    df["investor"]    = df[investor_col].astype(str).str.upper()
+    df["counterpart"] = df[counterpart_col].astype(str).str.upper() if counterpart_col else df["investor"]
+    df["year"]        = pd.to_numeric(df[time_col], errors="coerce").astype("Int64")
+    df["value"]       = pd.to_numeric(df[val_col], errors="coerce") / 1_000_000_000.0  # raw USD → billions
 
     if asset_col is not None:
         df["type"] = df[asset_col].map(IMF_ASSET_CLASS_TO_TYPE)
@@ -82,21 +89,49 @@ def compute_table2_latest(
 
     df = df[df["year"] == year].dropna(subset=["investor", "type", "value"]).copy()
 
-    # Aggregate total holdings per (investor, type) — includes own holdings via
-    # the own-holding rows if present; otherwise reflects foreign holdings only
-    agg = (
+    # ── Cross-border: investor's foreign holdings (sum over all issuers) ──────
+    foreign_invested = (
         df.groupby(["investor", "type"])["value"]
           .sum()
           .reset_index()
+          .rename(columns={"value": "foreign_out"})
     )
 
+    # ── Own holdings: imputed from amounts outstanding ────────────────────────
+    # For each issuer country: own = max(amounts - Σ foreign_inflows, ε)
+    amounts = build_amounts_latest(countries, year, data_dir)
+    amounts_y = amounts[amounts["year"] == year][["Counterpart", "type", "outstand"]].copy()
+
+    foreign_in = (
+        df[df["investor"] != df["counterpart"]]
+        .groupby(["counterpart", "type"])["value"]
+        .sum()
+        .reset_index()
+        .rename(columns={"counterpart": "Counterpart", "value": "foreign_in"})
+    )
+
+    own = amounts_y.merge(foreign_in, on=["Counterpart", "type"], how="left")
+    own["foreign_in"] = own["foreign_in"].fillna(0.0)
+    own["own"] = (own["outstand"] - own["foreign_in"]).clip(lower=0.0)
+    own = own.rename(columns={"Counterpart": "investor"})
+
+    # ── Combine: total = own + foreign invested abroad ────────────────────────
+    total = foreign_invested.merge(
+        own[["investor", "type", "own"]],
+        on=["investor", "type"],
+        how="outer",
+    )
+    total["foreign_out"] = total["foreign_out"].fillna(0.0)
+    total["own"]         = total["own"].fillna(0.0)
+    total["value"]       = total["foreign_out"] + total["own"]
+
     name_map = _country_names(countries)
-    agg["investor_name"] = agg["investor"].map(name_map).fillna(agg["investor"])
+    total["investor_name"] = total["investor"].map(name_map).fillna(total["investor"])
 
     result: dict[int, pd.DataFrame] = {}
     for tp in [1, 2, 3]:
         sub = (
-            agg[agg["type"] == tp]
+            total[total["type"] == tp]
             .sort_values("value", ascending=False)
             .head(10)
             .reset_index(drop=True)
