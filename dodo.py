@@ -262,10 +262,13 @@ def task_summary_stats():
         "targets": [
             OUTPUT_DIR / "summary_stats_table.tex",
             OUTPUT_DIR / "summary_stats_chart.png",
+            OUTPUT_DIR / "summary_stats_country_bar.png",
+            OUTPUT_DIR / "summary_stats_foreign_share.png",
         ],
         "file_dep": [
             "./src/summary_stats.py",
             DATA_DIR / "tidy_amounts.parquet",
+            DATA_DIR / "tidy_bilateral.parquet",
         ],
         "task_dep": ["tidy_data"],
         "clean": True,
@@ -284,6 +287,8 @@ def task_compile_summary():
             "./reports/report_summary.tex",
             OUTPUT_DIR / "summary_stats_table.tex",
             OUTPUT_DIR / "summary_stats_chart.png",
+            OUTPUT_DIR / "summary_stats_country_bar.png",
+            OUTPUT_DIR / "summary_stats_foreign_share.png",
         ],
         "task_dep": ["summary_stats"],
         "clean": True,

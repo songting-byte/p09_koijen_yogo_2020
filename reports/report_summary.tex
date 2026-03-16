@@ -19,10 +19,12 @@ This document summarises the underlying data used in the replication of
 Table~1 of Koijen \& Yogo (2020), ``Exchange Rates and Asset Prices in a
 Global Demand System.''
 The exhibits below provide a cross-sectional snapshot of outstanding financial
-assets for the latest year available and a time-series view of total amounts
-by asset class.  Together they allow the reader to assess data coverage,
-the relative scale of each asset class, and how the sample has evolved over
-the sample period.
+assets for the latest year available, a time-series view of total amounts
+by asset class, a country-level breakdown of total outstanding, and a
+cross-country view of foreign ownership shares.  Together they allow the
+reader to assess data coverage, the relative scale of each asset class,
+which economies dominate the sample, and how internationally held each
+market's assets are.
 \end{abstract}
 
 \section{Summary Statistics Table}
@@ -68,6 +70,60 @@ countries in the 37-country sample, expressed in USD trillions.
   Data sources: OECD T720, BIS WS\_NA\_SEC\_DSS, World Bank WDI.
 }
 \label{fig:summary_chart}
+\end{figure}
+
+\section{Country-Level Outstanding Amounts}
+
+Figure~\ref{fig:country_bar} ranks all 37 sample countries by their total
+outstanding financial assets in the latest available year, stacked by asset class.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\textwidth]{../_output/summary_stats_country_bar.png}
+\caption{%
+  \textbf{Outstanding financial assets by country and asset class, latest year
+  (Koijen \& Yogo 2020 replication).}
+  Each bar shows a country's total outstanding (USD trillions) split into
+  short-term debt (blue), long-term debt (green), and equity (pink).
+  Countries are ranked from smallest to largest total.
+  The reader should take away that the United States dwarfs all other
+  economies in both long-term debt and equity, followed by Japan and the
+  euro-area economies.  Equity is absent or very small for countries where
+  OECD T720 F5 data are unavailable and only World Bank market-cap data
+  are used, exposing a structural coverage gap for smaller emerging markets.
+  Data sources: OECD T720, BIS WS\_NA\_SEC\_DSS, World Bank WDI.
+}
+\label{fig:country_bar}
+\end{figure}
+
+\section{Foreign Ownership Shares}
+
+Figure~\ref{fig:foreign_share} shows the foreign ownership share --- defined
+as total cross-border holdings by all foreign investors divided by total
+outstanding --- for each country and asset class in the latest year.
+This is the key quantity studied by Koijen \& Yogo (2020): understanding
+\emph{who} holds which country's assets and \emph{how much} is held abroad
+is the foundation of their global demand-system model.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\textwidth]{../_output/summary_stats_foreign_share.png}
+\caption{%
+  \textbf{Foreign ownership share by country and asset class, latest year
+  (Koijen \& Yogo 2020 replication).}
+  Each dot shows the share of outstanding assets of a given class held by
+  foreign investors, as measured by IMF PIP/CPIS bilateral position data.
+  Circles = short-term debt, squares = long-term debt, triangles = equity.
+  Countries are ranked by their average foreign share across asset classes.
+  The reader should take away that small open economies (e.g.\ Belgium,
+  the Netherlands, Singapore) have the highest foreign ownership shares,
+  consistent with the paper's finding that these countries face the most
+  elastic foreign demand.  The United States and Japan, despite their
+  enormous market size, have relatively low foreign shares, especially in
+  equity, reflecting home-bias in global portfolios.
+  Foreign shares computed from IMF CPIS; outstanding from OECD/BIS/World Bank.
+}
+\label{fig:foreign_share}
 \end{figure}
 
 \section{Data Coverage Notes}
