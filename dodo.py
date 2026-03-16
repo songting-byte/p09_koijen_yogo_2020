@@ -86,7 +86,7 @@ def task_config():
 
 
 def task_pull():
-    """Pull data from BIS and OECD"""
+    """Pull data from BIS, OECD, IMF, and World Bank"""
     yield {
         "name": "bis",
         "doc": "Pull BIS debt securities data",
@@ -98,7 +98,6 @@ def task_pull():
         "file_dep": ["./src/settings.py", "./src/pull_bis.py"],
         "clean": [],
     }
-    '''
     yield {
         "name": "oecd_t720",
         "doc": "Pull OECD Table 720 balance sheet data",
@@ -110,7 +109,70 @@ def task_pull():
         "file_dep": ["./src/settings.py", "./src/pull_oecd.py"],
         "clean": [],
     }
-    '''
+    yield {
+        "name": "imf",
+        "doc": "Pull IMF PIP/CPIS bilateral and reserve positions",
+        "actions": [
+            "ipython ./src/settings.py",
+            "ipython ./src/pull_imf.py",
+        ],
+        "targets": [
+            DATA_DIR / "pip_bilateral_positions.parquet",
+            DATA_DIR / "pip_bilateral_positions_reserve.parquet",
+            DATA_DIR / "pip_currency_aggregates.parquet",
+            DATA_DIR / "pip_local_foreign_allocated.parquet",
+        ],
+        "file_dep": ["./src/settings.py", "./src/pull_imf.py"],
+        "clean": [],
+    }
+    yield {
+        "name": "wb",
+        "doc": "Pull World Bank WDI data",
+        "actions": [
+            "ipython ./src/settings.py",
+            "ipython ./src/pull_WB.py",
+        ],
+        "targets": [DATA_DIR / "wb_data360_wdi_selected.parquet"],
+        "file_dep": ["./src/settings.py", "./src/pull_WB.py"],
+        "clean": [],
+    }
+
+def task_build_tables():
+    """Build Table 1 and Table 2 from processed data"""
+    yield {
+        "name": "table1",
+        "doc": "Build Table 1 (Market Values of Financial Assets)",
+        "actions": ["ipython ./src/table_1.py"],
+        "targets": [OUTPUT_DIR / "table_1.txt"],
+        "file_dep": ["./src/table_1.py"],
+        "task_dep": ["pull:bis", "pull:oecd_t720", "pull:imf", "pull:wb"],
+        "clean": True,
+    }
+    yield {
+        "name": "table2",
+        "doc": "Build Table 2 (Top Ten Investors by Asset Class)",
+        "actions": ["ipython ./src/table_2.py"],
+        "targets": [OUTPUT_DIR / "table_2.txt"],
+        "file_dep": ["./src/table_1.py", "./src/table_2.py"],
+        "task_dep": ["build_tables:table1"],
+        "clean": True,
+    }
+
+
+def task_test():
+    """Run pytest on Table 1 and Table 2 test suites"""
+    return {
+        "actions": ["python -m pytest src/test_table_1.py src/test_table_2.py -v"],
+        "file_dep": [
+            "./src/test_table_1.py",
+            "./src/test_table_2.py",
+            "./src/table_1.py",
+            "./src/table_2.py",
+        ],
+        "task_dep": ["build_tables:table1", "build_tables:table2"],
+        "clean": [],
+    }
+
 
 def task_generate_chart():
     """Run generate_chart.py to produce the chart"""
