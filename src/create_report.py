@@ -428,23 +428,7 @@ def build_report(output_dir: Path, reports_dir: Path) -> str:
 \newpage
 
 %% ============================================================
-%%  SECTION 1 — YOUR PROJECT DISCUSSION (fill in below)
-%% ============================================================
-\section{Project Discussion}
-\label{sec:discussion}
-
-\noindent\textit{[TODO: Replace this section with your own discussion.
-Suggested content: motivation for the replication, key findings, challenges
-encountered, and any deviations from the original paper.]}
-
-\bigskip
-
-\noindent Lorem ipsum placeholder. Add your narrative here.
-
-\newpage
-
-%% ============================================================
-%%  SECTION 2 — PROJECT OVERVIEW (auto-generated)
+%%  SECTION 1 — PROJECT OVERVIEW (auto-generated)
 %% ============================================================
 \section{Replication Overview}
 \label{sec:overview}
@@ -497,7 +481,7 @@ data:
 \newpage
 
 %% ============================================================
-%%  SECTION 3 — DATA SOURCES
+%%  SECTION 2 — DATA SOURCES
 %% ============================================================
 \section{Data Sources}
 \label{sec:data}
@@ -544,7 +528,7 @@ for India, China, Malaysia, Philippines, Thailand, South Africa, and Russia.
 \newpage
 
 %% ============================================================
-%%  SECTION 4 — PAPER REPLICATION (Stata dataverse)
+%%  SECTION 3 — PAPER REPLICATION (Stata dataverse)
 %% ============================================================
 \section{Paper Replication: Original Dataverse Data}
 \label{sec:orig}
@@ -568,7 +552,7 @@ API-based replication.
 \newpage
 
 %% ============================================================
-%%  SECTION 5 — FIGURES (paper replication)
+%%  SECTION 4 — FIGURES (paper replication)
 %% ============================================================
 \section{Figures: Paper Replication}
 \label{sec:figures}
@@ -604,7 +588,7 @@ API-based replication.
 \newpage
 
 %% ============================================================
-%%  SECTION 6 — API-BASED REPLICATION (latest data: 2024)
+%%  SECTION 5 — API-BASED REPLICATION (latest data: 2024)
 %% ============================================================
 \section{API-Based Replication: Latest Data (2024)}
 \label{sec:latest}
@@ -630,7 +614,7 @@ amounts have grown substantially: US long-term debt rose from approximately
 \newpage
 
 %% ============================================================
-%%  SECTION 7 — API CROSS-CHECK AT 2020
+%%  SECTION 6 — API CROSS-CHECK AT 2020
 %% ============================================================
 \section{API Cross-Check: 2020}
 \label{sec:crosscheck}
@@ -656,7 +640,7 @@ the OECD F5 proxy issue described in Section~\ref{sec:overview}.
 \newpage
 
 %% ============================================================
-%%  SECTION 8 — SUMMARY STATISTICS
+%%  SECTION 7 — SUMMARY STATISTICS
 %% ============================================================
 \section{Summary Statistics}
 \label{sec:summary}

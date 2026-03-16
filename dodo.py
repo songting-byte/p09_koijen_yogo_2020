@@ -151,6 +151,55 @@ def task_pull():
         "clean": [],
     }
 
+    yield {
+        "name":    "figure1_xaxis",
+        "doc":     "Pull OECD short-term debt (USD) and compute Figure 1 x-axis",
+        "actions": ["ipython ./src/figure1_xaxis.py"],
+        "targets": [
+            DATA_DIR / "figure1_stdebt_usd.parquet",
+            DATA_DIR / "figure1_xaxis.parquet",
+        ],
+        "file_dep": ["./src/settings.py", "./src/figure1_xaxis.py"],
+        "task_dep": ["config"],
+        "clean":    [],
+    }
+
+    yield {
+        "name":    "figure1_yaxis",
+        "doc":     "Pull OECD 3-month interbank rates for Figure 1 y-axis",
+        "actions": ["ipython ./src/figure1_yaxis.py"],
+        "targets": [
+            DATA_DIR / "oecd_ir3tib_panel.parquet",
+            DATA_DIR / "oecd_ir3tib_wide.parquet",
+        ],
+        "file_dep": ["./src/settings.py", "./src/figure1_yaxis.py"],
+        "task_dep": ["config"],
+        "clean":    [],
+    }
+
+    yield {
+        "name":    "figure2_lt_usd",
+        "doc":     "Pull OECD long-term debt (USD) for Figure 2 x-axis",
+        "actions": ["ipython ./src/figure2_lt_usd.py"],
+        "targets": [DATA_DIR / "oecd_ltdebt_usd.parquet"],
+        "file_dep": ["./src/settings.py", "./src/figure2_lt_usd.py"],
+        "task_dep": ["config"],
+        "clean":    [],
+    }
+
+    yield {
+        "name":    "figure2_ir10y",
+        "doc":     "Pull OECD 10-year government bond yields for Figure 2",
+        "actions": ["ipython ./src/figure2_ir10y.py"],
+        "targets": [
+            DATA_DIR / "oecd_ir10y_panel.parquet",
+            DATA_DIR / "figure2_yaxis.parquet",
+        ],
+        "file_dep": ["./src/settings.py", "./src/figure2_ir10y.py"],
+        "task_dep": ["config"],
+        "clean":    [],
+    }
+
 def task_tidy_data():
     """Consolidate raw API parquets into tidy_amounts and tidy_bilateral parquets"""
     return {
@@ -226,6 +275,56 @@ def task_build_latest_tables():
         "uptodate": [False],
     }
 
+def task_figure1():
+    """Replicate Figure 1 (short-term debt vs. short-term rate differential)"""
+    return {
+        "actions":  ["ipython ./src/figure1_rep.py"],
+        "targets": [
+            OUTPUT_DIR / "figure1_replicated.png",
+            DATA_DIR   / "figure1_reproduced_data.parquet",
+        ],
+        "file_dep": [
+            "./src/settings.py",
+            "./src/figure1_rep.py",
+            DATA_DIR / "figure1_xaxis.parquet",
+            DATA_DIR / "oecd_ir3tib_wide.parquet",
+        ],
+        "task_dep": ["pull:figure1_xaxis", "pull:figure1_yaxis"],
+        "clean":    True,
+    }
+
+def task_figure2_x_y():
+    """Compute Figure 2 x-axis (Nelson-Siegel FV conversion)"""
+    return {
+        "actions":  ["ipython ./src/figure2_x_y.py"],
+        "targets":  [DATA_DIR / "figure2_xaxis.parquet"],
+        "file_dep": [
+            "./src/settings.py",
+            "./src/figure2_x_y.py",
+            DATA_DIR / "oecd_ltdebt_usd.parquet",
+            DATA_DIR / "figure2_yaxis.parquet",
+        ],
+        "task_dep": ["pull:figure2_lt_usd", "pull:figure2_ir10y"],
+        "clean":    True,
+    }
+
+def task_figure2():
+    """Replicate Figure 2 (long-term debt vs. long-term rate differential)"""
+    return {
+        "actions":  ["ipython ./src/figure2_rep.py"],
+        "targets": [
+            OUTPUT_DIR / "figure2_replicated.png",
+            DATA_DIR   / "figure2_reproduced_data.parquet",
+        ],
+        "file_dep": [
+            "./src/settings.py",
+            "./src/figure2_rep.py",
+            DATA_DIR / "figure2_xaxis.parquet",
+            DATA_DIR / "figure2_yaxis.parquet",
+        ],
+        "task_dep": ["figure2_x_y"],
+        "clean":    True,
+    }
 
 def task_test():
     """Run pytest on all test suites"""
@@ -279,12 +378,67 @@ def task_summary_stats():
     }
 
 
+# def task_compile_summary():
+#     """Compile the summary statistics LaTeX report to PDF"""
+#     return {
+#         "actions": [
+#             "latexmk -xelatex -halt-on-error -cd ./reports/report_summary.tex",
+#             "latexmk -xelatex -halt-on-error -c -cd ./reports/report_summary.tex",
+#         ],
+#         "targets": ["./reports/report_summary.pdf"],
+#         "file_dep": [
+#             "./reports/report_summary.tex",
+#             OUTPUT_DIR / "summary_stats_table.tex",
+#             OUTPUT_DIR / "summary_stats_chart.png",
+#             OUTPUT_DIR / "summary_stats_country_bar.png",
+#             OUTPUT_DIR / "summary_stats_foreign_share.png",
+#         ],
+#         "task_dep": ["summary_stats"],
+#         "clean": True,
+#     }
+
+
+# def task_create_report():
+#     """Generate and compile the comprehensive replication report PDF"""
+#     tex_out = BASE_DIR / "reports" / "report_koijen_yogo.tex"
+#     pdf_out = BASE_DIR / "reports" / "report_koijen_yogo.pdf"
+#     return {
+#         "actions": [
+#             "ipython ./src/create_report.py",
+#             "latexmk -xelatex -halt-on-error -cd ./reports/report_koijen_yogo.tex",
+#             "latexmk -xelatex -halt-on-error -c -cd ./reports/report_koijen_yogo.tex",
+#         ],
+#         "targets": [tex_out, pdf_out],
+#         "file_dep": [
+#             "./src/create_report.py",
+#             OUTPUT_DIR / "table_1.txt",
+#             OUTPUT_DIR / "table_2.txt",
+#             OUTPUT_DIR / "table_1_2020.txt",
+#             OUTPUT_DIR / "table_2_2020.txt",
+#             OUTPUT_DIR / "table_1_2024.txt",
+#             OUTPUT_DIR / "table_2_2024.txt",
+#             OUTPUT_DIR / "summary_stats_table.tex",
+#             OUTPUT_DIR / "summary_stats_chart.png",
+#             OUTPUT_DIR / "summary_stats_country_bar.png",
+#             OUTPUT_DIR / "summary_stats_foreign_share.png",
+#         ],
+#         "task_dep": [
+#             "build_tables:table1",
+#             "build_tables:table2",
+#             "build_latest_tables:table1",
+#             "build_latest_tables:table2",
+#             "summary_stats",
+#         ],
+#         "uptodate": [False],
+#         "clean": True,
+#     }
+
 def task_compile_summary():
     """Compile the summary statistics LaTeX report to PDF"""
     return {
         "actions": [
             "latexmk -xelatex -halt-on-error -cd ./reports/report_summary.tex",
-            "latexmk -xelatex -halt-on-error -c -cd ./reports/report_summary.tex",
+            "latexmk -xelatex -halt-on-error -c  -cd ./reports/report_summary.tex",
         ],
         "targets": ["./reports/report_summary.pdf"],
         "file_dep": [
@@ -297,8 +451,8 @@ def task_compile_summary():
         "task_dep": ["summary_stats"],
         "clean": True,
     }
-
-
+ 
+ 
 def task_create_report():
     """Generate and compile the comprehensive replication report PDF"""
     tex_out = BASE_DIR / "reports" / "report_koijen_yogo.tex"
@@ -306,12 +460,14 @@ def task_create_report():
     return {
         "actions": [
             "ipython ./src/create_report.py",
-            "latexmk -xelatex -halt-on-error -cd ./reports/report_koijen_yogo.tex",
-            "latexmk -xelatex -halt-on-error -c -cd ./reports/report_koijen_yogo.tex",
+            f"latexmk -xelatex -halt-on-error -cd {tex_out}",
+            f"latexmk -xelatex -halt-on-error -c  -cd {tex_out}",
         ],
         "targets": [tex_out, pdf_out],
         "file_dep": [
             "./src/create_report.py",
+            OUTPUT_DIR / "figure1_replicated.png",
+            OUTPUT_DIR / "figure2_replicated.png",
             OUTPUT_DIR / "table_1.txt",
             OUTPUT_DIR / "table_2.txt",
             OUTPUT_DIR / "table_1_2020.txt",
@@ -324,23 +480,24 @@ def task_create_report():
             OUTPUT_DIR / "summary_stats_foreign_share.png",
         ],
         "task_dep": [
+            "figure1",
+            "figure2",
+            "summary_stats",
             "build_tables:table1",
             "build_tables:table2",
             "build_latest_tables:table1",
             "build_latest_tables:table2",
-            "summary_stats",
         ],
         "uptodate": [False],
         "clean": True,
     }
 
-
 notebook_tasks = {
-    "01_example_notebook_interactive_ipynb": {
-        "path": "./src/01_example_notebook_interactive_ipynb.py",
-        "file_dep": [],
-        "targets": [],
-    },
+    # "01_example_notebook_interactive_ipynb": {
+    #     "path": "./src/01_example_notebook_interactive_ipynb.py",
+    #     "file_dep": [],
+    #     "targets": [],
+    # },
     "koijen_yogo_2020_tour_ipynb": {
         "path": "./src/koijen_yogo_2020_tour_ipynb.py",
         "file_dep": [
@@ -378,6 +535,7 @@ def task_run_notebooks():
             ],
             "targets": [
                 OUTPUT_DIR / f"{notebook}.html",
+                OUTPUT_DIR / f"{notebook}.ipynb",
                 *notebook_tasks[notebook]["targets"],
             ],
             "clean": True,

@@ -953,3 +953,48 @@ plt.tight_layout()
 if OUT_DIR.exists():
     plt.savefig(OUT_DIR / "nb_country_coverage.png", dpi=120, bbox_inches="tight")
 plt.show()
+
+# %% [markdown]
+# ---
+# ## 7. Figure 1 — Short-Term Debt and Interest-Rate Differentials
+#
+# Figure 1 plots the **demeaned log short-term debt ratio** (foreign minus US, x-axis)
+# against the **demeaned 3-month rate differential** (US minus foreign, y-axis)
+# for the Euro Area, Japan, Switzerland, and the United Kingdom, 2003–2020.
+#
+# - **x-axis:** OECD `DF_T720R_A` short-term debt (USD) → `figure1_xaxis.parquet`
+# - **y-axis:** OECD `DF_FINMARK` IR3TIB 3-month interbank rate → `figure1_yaxis.parquet`
+#
+# A positive slope in each panel confirms the paper's prediction: countries with
+# larger relative debt supply face lower interest rates than the US.
+ 
+# %%
+from IPython.display import Image, display
+ 
+fig1_png = OUT_DIR / "figure1_replicated.png"
+if fig1_png.exists():
+    display(Image(str(fig1_png)))
+else:
+    print("Figure 1 not yet generated. Run:  doit figure1")
+ 
+# %% [markdown]
+# ---
+# ## 8. Figure 2 — Long-Term Debt and Yield Differentials
+#
+# Figure 2 is the long-term analogue of Figure 1, using Germany, Japan,
+# Switzerland, and the United Kingdom, 2003–2020.
+#
+# - **x-axis:** OECD `DF_T720R_A` long-term debt (USD), converted to face value
+#   via Nelson-Siegel 5-year zero-coupon yield → `figure2_xaxis.parquet`
+# - **y-axis:** OECD `DF_FINMARK` IRLT 10-year par yield, NS-converted to
+#   5-year zero → `figure2_yaxis.parquet`
+#
+# The y-axis range is narrower (±2.5 pp vs ±4 pp) reflecting lower volatility
+# in long-term rate differentials. Germany proxies the Euro Area.
+ 
+# %%
+fig2_png = OUT_DIR / "figure2_replicated.png"
+if fig2_png.exists():
+    display(Image(str(fig2_png)))
+else:
+    print("Figure 2 not yet generated. Run:  doit figure2")
