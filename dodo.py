@@ -295,6 +295,42 @@ def task_compile_summary():
     }
 
 
+def task_create_report():
+    """Generate and compile the comprehensive replication report PDF"""
+    tex_out = BASE_DIR / "reports" / "report_koijen_yogo.tex"
+    pdf_out = BASE_DIR / "reports" / "report_koijen_yogo.pdf"
+    return {
+        "actions": [
+            "ipython ./src/create_report.py",
+            "latexmk -xelatex -halt-on-error -cd ./reports/report_koijen_yogo.tex",
+            "latexmk -xelatex -halt-on-error -c -cd ./reports/report_koijen_yogo.tex",
+        ],
+        "targets": [tex_out, pdf_out],
+        "file_dep": [
+            "./src/create_report.py",
+            OUTPUT_DIR / "table_1.txt",
+            OUTPUT_DIR / "table_2.txt",
+            OUTPUT_DIR / "table_1_2020.txt",
+            OUTPUT_DIR / "table_2_2020.txt",
+            OUTPUT_DIR / "table_1_2024.txt",
+            OUTPUT_DIR / "table_2_2024.txt",
+            OUTPUT_DIR / "summary_stats_table.tex",
+            OUTPUT_DIR / "summary_stats_chart.png",
+            OUTPUT_DIR / "summary_stats_country_bar.png",
+            OUTPUT_DIR / "summary_stats_foreign_share.png",
+        ],
+        "task_dep": [
+            "build_tables:table1",
+            "build_tables:table2",
+            "build_latest_tables:table1",
+            "build_latest_tables:table2",
+            "summary_stats",
+        ],
+        "uptodate": [False],
+        "clean": True,
+    }
+
+
 notebook_tasks = {
     "01_example_notebook_interactive_ipynb": {
         "path": "./src/01_example_notebook_interactive_ipynb.py",

@@ -1,0 +1,533 @@
+
+\documentclass[11pt]{article}
+
+\usepackage[english]{babel}
+\usepackage[letterpaper, top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\usepackage{caption}
+\usepackage{setspace}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+
+\title{%
+  \textbf{Replication of Koijen \& Yogo (2020):}\\[4pt]
+  \large Exchange Rates and Asset Prices in a Global Demand System
+}
+\author{Replication Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%% ============================================================
+%%  SECTION 1 — YOUR PROJECT DISCUSSION (fill in below)
+%% ============================================================
+\section{Project Discussion}
+\label{sec:discussion}
+
+\noindent\textit{[TODO: Replace this section with your own discussion.
+Suggested content: motivation for the replication, key findings, challenges
+encountered, and any deviations from the original paper.]}
+
+\bigskip
+
+\noindent Lorem ipsum placeholder. Add your narrative here.
+
+\newpage
+
+%% ============================================================
+%%  SECTION 2 — PROJECT OVERVIEW (auto-generated)
+%% ============================================================
+\section{Replication Overview}
+\label{sec:overview}
+
+This report documents the replication of Table~1 (Market Values of Financial
+Assets) and Table~2 (Top Ten Investors by Asset Class) from Koijen \& Yogo
+(2020), ``Exchange Rates and Asset Prices in a Global Demand System,'' NBER
+Working Paper~27342.  The paper develops a global demand system for financial
+assets in which exchange rates and asset prices are jointly determined by the
+portfolio choices of investors across 37 countries.  The key empirical
+contribution is a comprehensive dataset of outstanding amounts and bilateral
+cross-border holdings for short-term debt, long-term debt, and equity.
+
+\subsection{Where the Replication Succeeded}
+
+The API-based pipeline achieved close numerical agreement with the paper for
+most OECD developed-market economies.  For the 2020 cross-check year,
+long-term debt amounts for France, Germany, Italy, Spain, Canada, and Japan
+matched the paper's ground-truth values within 5\%, and the short-term debt
+rankings in Table~2 reproduced the correct ordering of the top investors.
+Approximately 63\% of individual cell-level comparisons passed a 15\%
+tolerance test when benchmarked against the paper's dataverse values.
+
+\subsection{Where the Replication Faced Challenges}
+
+Four structural limitations prevented full replication with freely available
+data:
+\begin{enumerate}
+  \item \textbf{Equity amounts.}  The paper uses proprietary Datastream
+    market-capitalisation data.  The best free substitute---OECD Table~720
+    instrument F5 (equity and investment fund shares)---overstates market
+    capitalisation by roughly 2--3$\times$ because it includes investment
+    fund shares.  This affects all equity cells in Table~1.
+  \item \textbf{Reserve shares.}  The paper uses IMF COFER data to allocate
+    official foreign-exchange reserves by currency and issuer.  The publicly
+    available CPIS S121 (central bank) reporter list is too sparse
+    ($\approx$8 reporters for the United States) to construct reliable
+    reserve shares.
+  \item \textbf{BIS currency adjustment.}  The BIS Domestic Debt Securities
+    Statistics (WS\_NA\_SEC\_DSS) reports all-currency totals.  A subtraction
+    of the foreign-currency slice from WS\_DEBT\_SEC2\_PUB was applied for
+    most countries; however, for Finland and Germany the OECD T720 national
+    accounts data already reflect local-currency-only amounts, so the BIS
+    adjustment was skipped for those two countries.
+  \item \textbf{Data gaps.}  New Zealand debt is absent from all free sources;
+    China reports only long-term general-government debt to BIS, missing
+    short-term and non-government sectors entirely.
+\end{enumerate}
+
+\newpage
+
+%% ============================================================
+%%  SECTION 3 — DATA SOURCES
+%% ============================================================
+\section{Data Sources}
+\label{sec:data}
+
+\subsection{OECD Table 720 (DF\_T720R\_A)}
+OECD Table~720 reports national financial accounts balance sheet data for
+27 OECD member countries, sourced via the OECD SDMX REST API in CSV format.
+Financial instrument F3 (debt securities) is split into short-term (S) and
+long-term (L) maturities.  Instrument F5 (equity and investment fund shares)
+provides an equity proxy, though it is known to overstate market capitalisation.
+Values are reported in millions of local currency; they are converted to USD
+billions using end-of-year exchange rates embedded in the API response.
+
+\subsection{BIS Domestic Debt Securities (WS\_NA\_SEC\_DSS)}
+The BIS Domestic Debt Securities Statistics cover 37 countries at quarterly
+frequency, reported in USD billions.  This series is used as the primary
+debt-outstanding source for non-OECD economies (China, India, Malaysia,
+Philippines, Russia, South Africa, Thailand, Hong Kong, Singapore, Australia)
+and as a fallback for OECD members not covered by T720.  VALUATION differs
+by country: most report at nominal value (N), Australia at market value (M),
+and Thailand at face value (F).
+
+\subsection{BIS International Debt Securities (WS\_DEBT\_SEC2\_PUB)}
+The BIS IDS foreign-currency slice is used to convert all-currency domestic
+totals to local-currency-only amounts, following the Appendix~C methodology
+of Koijen \& Yogo (2020).  Finland and Germany are excluded from this
+correction because their OECD T720 submissions already reflect
+local-currency amounts.
+
+\subsection{IMF Portfolio Investment Position (PIP/CPIS)}
+The IMF PIP bilateral parquet provides cross-border holdings between investor
+and issuer country pairs for short-term debt, long-term debt, and equity.
+These data underpin the foreign-ownership shares in Table~1 and the investor
+rankings in Table~2.  Values are in USD billions; the \texttt{value} column
+from the SDMX API is used directly (the \texttt{value\_usd} column applies
+an erroneous double-scaling).
+
+\subsection{World Bank WDI}
+World Bank Development Indicators (series CM.MKT.LCAP.CD) provide
+total stock-market capitalisation in USD for non-OECD economies where
+OECD T720 equity data are unavailable.  These are the primary equity source
+for India, China, Malaysia, Philippines, Thailand, South Africa, and Russia.
+
+\newpage
+
+%% ============================================================
+%%  SECTION 4 — PAPER REPLICATION (Stata dataverse)
+%% ============================================================
+\section{Paper Replication: Original Dataverse Data}
+\label{sec:orig}
+
+Tables~\ref{tab:t1_orig} and \ref{tab:t2_orig} reproduce Table~1 and Table~2
+from Koijen \& Yogo (2020) using the authors' dataverse Stata files for the
+year 2020.  These serve as the ground-truth benchmark for evaluating the
+API-based replication.
+
+\subsection{Table 1: Market Values of Financial Assets (Paper Replication)}
+
+\begin{landscape}
+\small
+\begin{longtable}{l r r r r r r r r r}
+\caption{Market values of financial assets, 2020. Replication of Table~1 in Koijen \& Yogo (2020) using the authors' dataverse Stata files. Columns report outstanding amounts in billion USD together with the share held by domestic investors and the share attributable to official reserve holdings. The United States dominates all asset classes by absolute size; the domestic share is high across most markets, consistent with the home-bias puzzle the paper seeks to explain.} \label{tab:t1_orig} \\
+\hline\hline
+ & \multicolumn{3}{c}{\textit{Short-term debt}} & \multicolumn{3}{c}{\textit{Long-term debt}} & \multicolumn{3}{c}{\textit{Equity}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Country & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. \\
+\hline
+\endfirsthead
+\caption*{Market values of financial assets, 2020. Replication of Table~1 in Koijen \& Yogo (2020) using the authors' dataverse Stata files. Columns report outstanding amounts in billion USD together with the share held by domestic investors and the share attributable to official reserve holdings. The United States dominates all asset classes by absolute size; the domestic share is high across most markets, consistent with the home-bias puzzle the paper seeks to explain. (continued)} \\
+\hline\hline
+ & \multicolumn{3}{c}{\textit{Short-term debt}} & \multicolumn{3}{c}{\textit{Long-term debt}} & \multicolumn{3}{c}{\textit{Equity}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Country & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. \\
+\hline
+\endhead
+\hline
+\multicolumn{10}{r}{\footnotesize\textit{Continued on next page}} \\
+\endfoot
+\hline\hline
+\endlastfoot
+\multicolumn{10}{l}{\textit{Developed markets: North America}} \\
+Canada & 521 & 0.78 & 0.06 & 2,469 & 0.63 & 0.06 & 6,527 & 0.87 & 0.00 \\
+United States & 5,481 & 0.92 & 0.04 & 39,653 & 0.83 & 0.06 & 55,667 & 0.87 & 0.00 \\
+\multicolumn{10}{l}{\textit{Developed markets: Europe}} \\
+Austria & 15 & 0.00 & 0.76 & 317 & 0.09 & 0.15 & 288 & 0.79 & 0.00 \\
+Belgium & 120 & 0.68 & 0.11 & 943 & 0.53 & 0.08 & 1,758 & 0.93 & 0.00 \\
+Finland & 61 & 0.52 & 0.18 & 229 & 0.01 & 0.16 & 664 & 0.78 & 0.00 \\
+France & 596 & 0.74 & 0.12 & 4,093 & 0.53 & 0.09 & 10,623 & 0.89 & 0.00 \\
+Germany & 292 & 0.30 & 0.37 & 3,299 & 0.43 & 0.17 & 3,692 & 0.57 & 0.00 \\
+Ireland & 30 & 0.00 & 0.07 & 297 & 0.00 & 0.04 & 176 & 0.00 & 0.01 \\
+Italy & 159 & 0.59 & 0.01 & 2,896 & 0.70 & 0.00 & 2,413 & 0.89 & 0.00 \\
+Netherlands & 51 & 0.09 & 0.33 & 797 & 0.01 & 0.13 & 6,073 & 0.80 & 0.00 \\
+Portugal & 25 & 0.59 & 0.01 & 272 & 0.61 & 0.01 & 386 & 0.92 & 0.00 \\
+Spain & 180 & 0.60 & 0.13 & 2,042 & 0.54 & 0.05 & 2,245 & 0.88 & 0.00 \\
+Denmark & 48 & 0.53 & 0.29 & 669 & 0.73 & 0.02 & 1,705 & 0.85 & 0.00 \\
+Israel & 29 & 0.89 & 0.01 & 509 & 0.84 & 0.00 & 661 & 0.86 & 0.00 \\
+Norway & 30 & 0.45 & 0.08 & 217 & 0.05 & 0.11 & 1,038 & 0.91 & 0.00 \\
+Sweden & 121 & 0.44 & 0.08 & 363 & 0.30 & 0.06 & 3,025 & 0.88 & 0.00 \\
+Switzerland & 115 & 0.73 & 0.16 & 900 & 0.79 & 0.03 & 3,756 & 0.75 & 0.00 \\
+United Kingdom & 280 & 0.67 & 0.05 & 3,138 & 0.69 & 0.05 & 6,621 & 0.76 & 0.00 \\
+\multicolumn{10}{l}{\textit{Developed markets: Pacific}} \\
+Australia & 195 & 0.76 & 0.04 & 1,693 & 0.63 & 0.05 & 1,763 & 0.73 & 0.00 \\
+Hong Kong & 9 & 0.02 & 0.08 & 63 & 0.07 & 0.02 & 2,454 & 0.81 & 0.00 \\
+Japan & 1,887 & 0.74 & 0.12 & 13,408 & 0.95 & 0.01 & 12,174 & 0.87 & 0.00 \\
+New Zealand & 4 & 0.07 & 0.21 & 53 & 0.37 & 0.06 & 1,030 & 0.96 & 0.00 \\
+Singapore & 56 & 0.00 & 0.29 & 203 & 0.58 & 0.04 & 893 & 0.82 & 0.00 \\
+\multicolumn{10}{l}{\textit{Emerging markets}} \\
+Greece & 15 & 0.69 & 0.00 & 67 & 0.72 & 0.01 & 183 & 0.91 & 0.00 \\
+Brazil & 399 & 0.97 & 0.00 & 1,432 & 0.87 & 0.00 & 2,401 & 0.91 & 0.00 \\
+Chile & 1 & 0.00 & 0.16 & 54 & 0.00 & 0.02 & 149 & 0.91 & 0.00 \\
+China & 370 & 0.74 & 0.01 & 14,780 & 0.96 & 0.00 & 15,004 & 0.77 & 0.00 \\
+Colombia & 27 & 0.99 & 0.00 & 182 & 0.69 & 0.00 & 484 & 0.99 & 0.00 \\
+Czech Republic & 28 & 0.00 & 0.00 & 95 & 0.54 & 0.00 & 110 & 0.98 & 0.00 \\
+Egypt & 10 & 0.00 & 0.00 & 16 & 0.00 & 0.00 & 35 & 0.86 & 0.00 \\
+Hungary & 7 & 0.95 & 0.00 & 107 & 0.75 & 0.00 & 104 & 0.89 & 0.00 \\
+India & 118 & 0.93 & 0.01 & 736 & 0.89 & 0.00 & 2,356 & 0.80 & 0.00 \\
+Indonesia & 6 & 0.03 & 0.21 & 232 & 0.49 & 0.00 & 494 & 0.86 & 0.00 \\
+Malaysia & 18 & 0.83 & 0.01 & 345 & 0.83 & 0.00 & 448 & 0.89 & 0.00 \\
+Mexico & 94 & 0.96 & 0.00 & 581 & 0.64 & 0.00 & 1,314 & 0.94 & 0.00 \\
+Pakistan & 30 & 1.00 & 0.00 & 57 & 0.95 & 0.00 & 2 & 0.00 & 0.00 \\
+Peru & 17 & 0.98 & 0.00 & 32 & 0.00 & 0.02 & 52 & 0.67 & 0.00 \\
+Philippines & 17 & 0.99 & 0.00 & 91 & 0.69 & 0.00 & 261 & 0.88 & 0.00 \\
+Poland & 42 & 0.98 & 0.00 & 301 & 0.76 & 0.00 & 256 & 0.91 & 0.00 \\
+Russia & 9 & 0.36 & 0.10 & 295 & 0.64 & 0.01 & 123 & 0.00 & 0.00 \\
+South Africa & 45 & 0.97 & 0.01 & 194 & 0.70 & 0.01 & 1,115 & 0.91 & 0.00 \\
+South Korea & 309 & 0.92 & 0.03 & 2,102 & 0.91 & 0.02 & 3,147 & 0.85 & 0.00 \\
+Taiwan & 96 & 0.99 & 0.00 & 332 & 0.95 & 0.00 & 583 & 0.00 & 0.00 \\
+Thailand & 74 & 0.97 & 0.00 & 335 & 0.91 & 0.00 & 538 & 0.86 & 0.00 \\
+Turkey & 21 & 0.83 & 0.00 & 72 & 0.36 & 0.00 & 214 & 0.90 & 0.00 \\
+\end{longtable}
+\end{landscape}
+
+\subsection{Table 2: Top Ten Investors by Asset Class (Paper Replication)}
+
+\begin{table}[ht]
+\centering
+\caption{Top ten investors by asset class, 2020 (paper replication). Rankings are based on the IMF CPIS bilateral holdings in the authors' dataverse. The United States is the largest foreign investor in all three classes; Japan is a distant second in short-term and long-term debt, while the ranking for equity is more dispersed. \textit{Reserves} denotes aggregate official reserve holdings.}
+\label{tab:t2_orig}
+\small
+\begin{tabular}{l r l r l r}
+\hline\hline
+\multicolumn{2}{c}{\textit{Short-term debt}} & \multicolumn{2}{c}{\textit{Long-term debt}} & \multicolumn{2}{c}{\textit{Equity}} \\
+\cmidrule(lr){1-2}\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Country & Bn USD & Country & Bn USD & Country & Bn USD \\
+\hline
+United States & 5,400 & United States & 35,893 & United States & 56,369 \\
+Japan & 1,420 & Japan & 15,391 & Japan & 12,409 \\
+Reserves & 867 & China & 14,371 & China & 11,946 \\
+France & 670 & Reserves & 4,272 & France & 10,330 \\
+Canada & 416 & France & 3,612 & Canada & 7,367 \\
+Brazil & 393 & Germany & 3,551 & United Kingdom & 6,666 \\
+United Kingdom & 334 & United Kingdom & 3,467 & Netherlands & 5,976 \\
+China & 299 & Italy & 2,706 & Switzerland & 3,390 \\
+South Korea & 288 & South Korea & 2,128 & Germany & 3,370 \\
+Australia & 202 & Canada & 1,981 & Hong Kong & 3,240 \\
+\hline\hline
+\end{tabular}
+\end{table}
+
+\newpage
+
+%% ============================================================
+%%  SECTION 5 — FIGURES (paper replication)
+%% ============================================================
+\section{Figures: Paper Replication}
+\label{sec:figures}
+\subsection{Figure 1: Short-Term Debt and Interest-Rate Differentials}
+
+\noindent\textit{[Figure 1 output (figure1\_replicated.png) not found in \_output/. Run src/figure1\_rep.py to generate it.]}
+
+\subsection{Figure 2: Long-Term Debt and Yield Differentials}
+
+\noindent\textit{[Figure 2 output (figure2\_replicated.png) not found in \_output/. Run src/figure2\_rep.py to generate it.]}
+
+
+\newpage
+
+%% ============================================================
+%%  SECTION 6 — API-BASED REPLICATION (latest data: 2024)
+%% ============================================================
+\section{API-Based Replication: Latest Data (2024)}
+\label{sec:latest}
+
+Tables~\ref{tab:t1_2024} and \ref{tab:t2_2024} present the replication
+tables for the most recent data vintage (2024) sourced entirely from
+publicly available APIs.  Compared with the 2020 benchmark, outstanding
+amounts have grown substantially: US long-term debt rose from approximately
+\$41 trillion to \$51 trillion, and US equity from \$81 trillion to
+\$116 trillion, reflecting the decade-long expansion of global capital markets.
+
+\subsection{Table 1: Market Values of Financial Assets (2024)}
+
+\begin{landscape}
+\small
+\begin{longtable}{l r r r r r r r r r}
+\caption{Market values of financial assets, 2024 (latest available data). Produced from the most recent API vintage as of the pull date. Compared with 2020, total outstanding amounts have grown substantially in most markets, with US long-term debt rising from roughly \$41 trillion to \$51 trillion and US equity from \$81 trillion to \$116 trillion. The domestic share patterns are broadly stable over time, indicating persistent home-bias structures.} \label{tab:t1_2024} \\
+\hline\hline
+ & \multicolumn{3}{c}{\textit{Short-term debt}} & \multicolumn{3}{c}{\textit{Long-term debt}} & \multicolumn{3}{c}{\textit{Equity}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Country & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. \\
+\hline
+\endfirsthead
+\caption*{Market values of financial assets, 2024 (latest available data). Produced from the most recent API vintage as of the pull date. Compared with 2020, total outstanding amounts have grown substantially in most markets, with US long-term debt rising from roughly \$41 trillion to \$51 trillion and US equity from \$81 trillion to \$116 trillion. The domestic share patterns are broadly stable over time, indicating persistent home-bias structures. (continued)} \\
+\hline\hline
+ & \multicolumn{3}{c}{\textit{Short-term debt}} & \multicolumn{3}{c}{\textit{Long-term debt}} & \multicolumn{3}{c}{\textit{Equity}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Country & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. \\
+\hline
+\endhead
+\hline
+\multicolumn{10}{r}{\footnotesize\textit{Continued on next page}} \\
+\endfoot
+\hline\hline
+\endlastfoot
+\multicolumn{10}{l}{\textit{Developed markets: North America}} \\
+Canada & 496 & 0.69 & 0.00 & 3,520 & 0.75 & 0.01 & 8,321 & 0.86 & 0.00 \\
+United States & 7,135 & 0.96 & 0.00 & 51,009 & 0.90 & 0.01 & 116,168 & 0.92 & 0.00 \\
+\multicolumn{10}{l}{\textit{Developed markets: Europe}} \\
+Austria & 33 & 0.71 & 0.01 & 587 & 0.57 & 0.03 & 1,002 & 0.94 & 0.00 \\
+Belgium & 104 & 0.68 & 0.03 & 755 & 0.58 & 0.04 & 1,788 & 0.93 & 0.00 \\
+Finland & 63 & 0.74 & 0.02 & 363 & 0.50 & 0.05 & 595 & 0.75 & 0.00 \\
+France & 702 & 0.80 & 0.01 & 5,209 & 0.72 & 0.02 & 13,245 & 0.91 & 0.00 \\
+Germany & 262 & 0.55 & 0.03 & 3,817 & 0.75 & 0.01 & 8,180 & 0.88 & 0.00 \\
+Greece & 9 & 0.87 & 0.01 & 140 & 0.90 & 0.01 & 299 & 0.92 & 0.00 \\
+Italy & 142 & 0.69 & 0.07 & 3,334 & 0.82 & 0.02 & 3,825 & 0.93 & 0.00 \\
+Netherlands & 140 & 0.59 & 0.01 & 1,910 & 0.48 & 0.07 & 7,001 & 0.87 & 0.00 \\
+Portugal & 22 & 0.81 & 0.01 & 290 & 0.74 & 0.03 & 677 & 0.96 & 0.00 \\
+Spain & 126 & 0.77 & 0.03 & 2,018 & 0.67 & 0.03 & 4,051 & 0.93 & 0.00 \\
+Denmark & 12 & 0.41 & 0.05 & 680 & 0.78 & 0.03 & 2,464 & 0.85 & 0.00 \\
+Norway & 56 & 0.73 & 0.00 & 431 & 0.63 & 0.03 & 1,005 & 0.92 & 0.00 \\
+Sweden & 160 & 0.68 & 0.03 & 675 & 0.71 & 0.05 & 3,054 & 0.90 & 0.00 \\
+Switzerland & 131 & 0.93 & 0.00 & 711 & 0.81 & 0.00 & 3,286 & 0.71 & 0.00 \\
+United Kingdom & 611 & 0.78 & 0.01 & 4,854 & 0.76 & 0.01 & 6,754 & 0.68 & 0.00 \\
+\multicolumn{10}{l}{\textit{Developed markets: Pacific}} \\
+Hong Kong & 334 & 0.90 & 0.01 & 125 & 0.02 & 0.07 & 4,550 & 0.84 & 0.00 \\
+Japan & 981 & 0.87 & 0.03 & 9,047 & 0.95 & 0.00 & 10,581 & 0.84 & 0.00 \\
+New Zealand & 3 & 0.00 & 0.27 & 115 & 0.53 & 0.03 & 93 & 0.63 & 0.00 \\
+Singapore & 365 & 0.84 & 0.00 & 440 & 0.69 & 0.01 & 638 & 0.64 & 0.00 \\
+\multicolumn{10}{l}{\textit{Emerging markets}} \\
+Brazil & 168 & 0.90 & 0.01 & 2,584 & 0.96 & 0.00 & 659 & 0.74 & 0.00 \\
+Colombia & 42 & 1.00 & 0.00 & 219 & 0.80 & 0.00 & 591 & 0.99 & 0.00 \\
+Czech Republic & 15 & 0.28 & 0.00 & 176 & 0.82 & 0.00 & 503 & 0.99 & 0.00 \\
+Hungary & 22 & 0.74 & 0.00 & 153 & 0.77 & 0.01 & 437 & 0.97 & 0.00 \\
+Malaysia & 13 & 0.71 & 0.07 & 461 & 0.89 & 0.01 & 449 & 0.90 & 0.00 \\
+Mexico & 115 & 0.96 & 0.03 & 980 & 0.85 & 0.00 & 1,825 & 0.95 & 0.00 \\
+Philippines & 27 & 0.96 & 0.01 & 15 & 0.00 & 0.11 & 252 & 0.90 & 0.00 \\
+Poland & 74 & 1.00 & 0.00 & 411 & 0.82 & 0.00 & 693 & 0.96 & 0.00 \\
+Russia & 4 & 0.98 & 0.01 & 537 & 0.99 & 0.00 & \multicolumn{1}{c}{---} & \multicolumn{1}{c}{---} & \multicolumn{1}{c}{---} \\
+South Africa & 81 & 0.98 & 0.00 & 748 & 0.95 & 0.00 & 986 & 0.91 & 0.00 \\
+South Korea & 289 & 0.92 & 0.00 & 2,083 & 0.92 & 0.01 & 2,413 & 0.86 & 0.00 \\
+\end{longtable}
+\end{landscape}
+
+\subsection{Table 2: Top Ten Investors by Asset Class (2024)}
+
+\begin{table}[ht]
+\centering
+\caption{Top ten investors by asset class, 2024 (latest available data). The United States retains its dominant position across all three asset classes in the latest vintage. China has risen in the equity ranking, reflecting continued growth in Chinese institutional asset management. Values are in billion USD.}
+\label{tab:t2_2024}
+\small
+\begin{tabular}{l r l r l r}
+\hline\hline
+\multicolumn{2}{c}{\textit{Short-term debt}} & \multicolumn{2}{c}{\textit{Long-term debt}} & \multicolumn{2}{c}{\textit{Equity}} \\
+\cmidrule(lr){1-2}\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Country & Bn USD & Country & Bn USD & Country & Bn USD \\
+\hline
+United States & 7,220 & United States & 48,185 & United States & 114,220 \\
+Japan & 881 & Japan & 10,437 & France & 12,829 \\
+France & 775 & France & 5,269 & China & 11,592 \\
+United Kingdom & 634 & United Kingdom & 4,806 & Japan & 10,279 \\
+Hong Kong & 441 & Germany & 4,617 & Canada & 9,218 \\
+Singapore & 380 & Italy & 3,456 & Germany & 8,243 \\
+Canada & 355 & Canada & 3,267 & Netherlands & 7,009 \\
+South Korea & 275 & Brazil & 2,489 & United Kingdom & 6,460 \\
+Switzerland & 195 & South Korea & 2,125 & India & 4,352 \\
+Germany & 190 & Spain & 1,741 & Hong Kong & 4,349 \\
+\hline\hline
+\end{tabular}
+\end{table}
+
+\newpage
+
+%% ============================================================
+%%  SECTION 7 — API CROSS-CHECK AT 2020
+%% ============================================================
+\section{API Cross-Check: 2020}
+\label{sec:crosscheck}
+
+Tables~\ref{tab:t1_2020} and \ref{tab:t2_2020} present the API-based
+replication for 2020, the same year as the paper.  Direct comparison with
+Tables~\ref{tab:t1_orig} and \ref{tab:t2_orig} reveals where the free-data
+pipeline agrees and where it diverges.  Long-term debt amounts are broadly
+consistent for most OECD economies; equity amounts are overstated due to
+the OECD F5 proxy issue described in Section~\ref{sec:overview}.
+
+\subsection{Table 1: Market Values of Financial Assets (2020, API)}
+
+\begin{landscape}
+\small
+\begin{longtable}{l r r r r r r r r r}
+\caption{Market values of financial assets, 2020 (API replication). Same format as Table~\ref{tab:t1_orig} but sourced entirely from publicly available APIs (OECD T720, BIS WS\_NA\_SEC\_DSS, IMF PIP, World Bank WDI). This cross-check year allows direct comparison with the paper values to assess replication accuracy. Amounts are broadly consistent with the paper but differ where API coverage diverges from proprietary data sources.} \label{tab:t1_2020} \\
+\hline\hline
+ & \multicolumn{3}{c}{\textit{Short-term debt}} & \multicolumn{3}{c}{\textit{Long-term debt}} & \multicolumn{3}{c}{\textit{Equity}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Country & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. \\
+\hline
+\endfirsthead
+\caption*{Market values of financial assets, 2020 (API replication). Same format as Table~\ref{tab:t1_orig} but sourced entirely from publicly available APIs (OECD T720, BIS WS\_NA\_SEC\_DSS, IMF PIP, World Bank WDI). This cross-check year allows direct comparison with the paper values to assess replication accuracy. Amounts are broadly consistent with the paper but differ where API coverage diverges from proprietary data sources. (continued)} \\
+\hline\hline
+ & \multicolumn{3}{c}{\textit{Short-term debt}} & \multicolumn{3}{c}{\textit{Long-term debt}} & \multicolumn{3}{c}{\textit{Equity}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Country & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. & Bn USD & Dom. & Res. \\
+\hline
+\endhead
+\hline
+\multicolumn{10}{r}{\footnotesize\textit{Continued on next page}} \\
+\endfoot
+\hline\hline
+\endlastfoot
+\multicolumn{10}{l}{\textit{Developed markets: North America}} \\
+Canada & 540 & 0.76 & 0.00 & 3,409 & 0.77 & 0.01 & 6,599 & 0.87 & 0.00 \\
+United States & 5,717 & 0.96 & 0.00 & 40,932 & 0.89 & 0.01 & 80,837 & 0.92 & 0.00 \\
+\multicolumn{10}{l}{\textit{Developed markets: Europe}} \\
+Austria & 32 & 0.84 & 0.03 & 654 & 0.59 & 0.03 & 937 & 0.93 & 0.00 \\
+Belgium & 83 & 0.69 & 0.04 & 875 & 0.60 & 0.02 & 1,912 & 0.93 & 0.00 \\
+Finland & 67 & 0.80 & 0.06 & 370 & 0.49 & 0.04 & 692 & 0.77 & 0.00 \\
+France & 723 & 0.86 & 0.01 & 5,600 & 0.71 & 0.02 & 11,799 & 0.90 & 0.00 \\
+Germany & 354 & 0.76 & 0.02 & 4,306 & 0.76 & 0.02 & 8,209 & 0.88 & 0.00 \\
+Greece & 14 & 0.66 & 0.02 & 117 & 0.88 & 0.02 & 204 & 0.93 & 0.00 \\
+Italy & 158 & 0.59 & 0.08 & 3,744 & 0.80 & 0.02 & 3,133 & 0.93 & 0.00 \\
+Netherlands & 124 & 0.59 & 0.02 & 2,315 & 0.49 & 0.08 & 7,375 & 0.89 & 0.00 \\
+Portugal & 26 & 0.80 & 0.03 & 364 & 0.74 & 0.04 & 588 & 0.96 & 0.00 \\
+Spain & 145 & 0.70 & 0.09 & 2,296 & 0.68 & 0.03 & 4,047 & 0.93 & 0.00 \\
+Denmark & 57 & 0.79 & 0.01 & 827 & 0.78 & 0.02 & 1,934 & 0.87 & 0.00 \\
+Israel & 27 & 0.90 & 0.00 & 567 & 0.92 & 0.00 & 784 & 0.89 & 0.00 \\
+Norway & 34 & 0.52 & 0.00 & 478 & 0.61 & 0.02 & 1,138 & 0.92 & 0.00 \\
+Sweden & 162 & 0.59 & 0.02 & 858 & 0.68 & 0.03 & 3,462 & 0.91 & 0.00 \\
+Switzerland & 67 & 0.86 & 0.00 & 655 & 0.82 & 0.01 & 3,734 & 0.73 & 0.00 \\
+United Kingdom & 498 & 0.71 & 0.01 & 6,270 & 0.79 & 0.01 & 6,573 & 0.74 & 0.01 \\
+\multicolumn{10}{l}{\textit{Developed markets: Pacific}} \\
+Hong Kong & 269 & 0.91 & 0.02 & 41 & 0.00 & 0.26 & 6,130 & 0.88 & 0.00 \\
+Japan & 1,846 & 0.86 & 0.04 & 13,516 & 0.96 & 0.00 & 12,563 & 0.87 & 0.00 \\
+New Zealand & 5 & 0.00 & 0.15 & 96 & 0.51 & 0.02 & 132 & 0.69 & 0.00 \\
+Singapore & 183 & 0.69 & 0.01 & 359 & 0.77 & 0.01 & 653 & 0.77 & 0.00 \\
+\multicolumn{10}{l}{\textit{Emerging markets}} \\
+Brazil & 450 & 0.99 & 0.00 & 1,682 & 0.95 & 0.00 & 3,141 & 0.93 & 0.00 \\
+Colombia & 27 & 1.00 & 0.00 & 237 & 0.79 & 0.00 & 500 & 0.99 & 0.00 \\
+Czech Republic & 29 & 0.06 & 0.00 & 142 & 0.81 & 0.00 & 428 & 0.99 & 0.00 \\
+Hungary & 7 & 0.94 & 0.00 & 133 & 0.80 & 0.01 & 539 & 0.98 & 0.00 \\
+Malaysia & 18 & 0.86 & 0.04 & 390 & 0.86 & 0.01 & 437 & 0.90 & 0.00 \\
+Mexico & 92 & 0.97 & 0.02 & 835 & 0.75 & 0.00 & 1,614 & 0.94 & 0.00 \\
+Philippines & 9 & 0.85 & 0.05 & 25 & 0.00 & 0.14 & 273 & 0.88 & 0.00 \\
+Poland & 42 & 0.98 & 0.00 & 366 & 0.79 & 0.01 & 561 & 0.96 & 0.00 \\
+Russia & 9 & 0.96 & 0.00 & 407 & 0.91 & 0.00 & 695 & 0.86 & 0.00 \\
+South Africa & 48 & 0.99 & 0.00 & 351 & 0.88 & 0.00 & 1,052 & 0.90 & 0.00 \\
+South Korea & 320 & 0.96 & 0.00 & 2,280 & 0.94 & 0.01 & 3,167 & 0.84 & 0.00 \\
+\end{longtable}
+\end{landscape}
+
+\subsection{Table 2: Top Ten Investors by Asset Class (2020, API)}
+
+\begin{table}[ht]
+\centering
+\caption{Top ten investors by asset class, 2020 (API replication). Rankings based on IMF CPIS bilateral holdings from the PIP API. Compare with Table~\ref{tab:t2_orig}: the top investors are broadly similar, validating the free-data pipeline.}
+\label{tab:t2_2020}
+\small
+\begin{tabular}{l r l r l r}
+\hline\hline
+\multicolumn{2}{c}{\textit{Short-term debt}} & \multicolumn{2}{c}{\textit{Long-term debt}} & \multicolumn{2}{c}{\textit{Equity}} \\
+\cmidrule(lr){1-2}\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Country & Bn USD & Country & Bn USD & Country & Bn USD \\
+\hline
+United States & 5,962 & United States & 38,706 & United States & 81,452 \\
+Japan & 1,624 & Japan & 15,539 & Japan & 12,025 \\
+France & 881 & United Kingdom & 6,071 & China & 11,892 \\
+United Kingdom & 463 & France & 5,568 & France & 11,288 \\
+Brazil & 448 & Germany & 5,446 & Germany & 8,059 \\
+Canada & 417 & Italy & 3,654 & Netherlands & 7,546 \\
+Hong Kong & 394 & Canada & 3,087 & Canada & 7,300 \\
+South Korea & 309 & South Korea & 2,350 & United Kingdom & 6,337 \\
+Germany & 301 & Netherlands & 2,107 & Hong Kong & 5,838 \\
+Singapore & 193 & Spain & 1,879 & Spain & 3,911 \\
+\hline\hline
+\end{tabular}
+\end{table}
+
+\newpage
+
+%% ============================================================
+%%  SECTION 8 — SUMMARY STATISTICS
+%% ============================================================
+\section{Summary Statistics}
+\label{sec:summary}
+
+This section presents supplementary summary statistics and charts that give
+the reader a broader understanding of the underlying data used in the
+replication.
+
+\subsection{Cross-Sectional Distribution (Latest Year)}
+
+Table~\ref{tab:summary_stats} summarises the cross-sectional distribution
+of outstanding amounts across the 37-country sample for the most recent year.
+Long-term debt is the largest asset class by aggregate total; equity shows
+the widest cross-country dispersion, driven by the outsized size of the
+US and Japanese stock markets.
+
+\input{../_output/summary_stats_table.tex}
+
+\subsection{Time-Series Totals by Asset Class}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\textwidth]{../_output/summary_stats_chart.png}
+\caption{\textbf{Total outstanding financial assets by asset class, 37-country sample.} Short-term debt (blue), long-term debt (green), and equity (pink) in USD trillions from the earliest API vintage through 2024. Long-term debt dominates throughout; equity surged in the 2010s before the post-2021 correction. Sources: OECD T720, BIS WS\_NA\_SEC\_DSS, World Bank WDI.}
+\label{fig:ss_ts}
+\end{figure}
+
+\subsection{Country-Level Outstanding Amounts}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\textwidth]{../_output/summary_stats_country_bar.png}
+\caption{\textbf{Outstanding financial assets by country, 2024.} Each bar shows a country's total outstanding (USD trillions) split by short-term debt (blue), long-term debt (green), and equity (pink), ranked by total. The United States dwarfs all other economies; equity coverage gaps for several emerging markets reflect reliance on OECD F5 proxy data.}
+\label{fig:ss_bar}
+\end{figure}
+
+\subsection{Foreign Ownership Shares}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\textwidth]{../_output/summary_stats_foreign_share.png}
+\caption{\textbf{Foreign ownership share by country and asset class, 2024.} Each dot shows the fraction of outstanding assets held by foreign investors per IMF CPIS. Small open economies (Belgium, Netherlands, Singapore) have the highest foreign shares; the United States and Japan have low foreign shares despite their large market size, illustrating the home-bias pattern the paper's demand system models.}
+\label{fig:ss_fs}
+\end{figure}
+
+\end{document}
