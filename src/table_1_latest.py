@@ -359,7 +359,7 @@ def _load_cpis_bilateral(data_dir: Path) -> pd.DataFrame:
     df["investor"]    = df[investor_col].astype(str).str.upper()
     df["Counterpart"] = df[counterpart_col].astype(str).str.upper()
     df["year"]        = pd.to_numeric(df[time_col], errors="coerce").astype("Int64")
-    df["value"]       = pd.to_numeric(df[val_col], errors="coerce") / 1000.0  # millions → billions
+    df["value"]       = pd.to_numeric(df[val_col], errors="coerce") / 1_000_000_000.0  # raw USD → billions
 
     if asset_col is not None:
         df["type"] = df[asset_col].map(IMF_ASSET_CLASS_TO_TYPE)
@@ -406,7 +406,7 @@ def _load_cpis_reserves(data_dir: Path) -> pd.DataFrame:
 
     df["Counterpart"] = df[counterpart_col].astype(str).str.upper()
     df["year"]        = pd.to_numeric(df[time_col], errors="coerce").astype("Int64")
-    df["reserve"]     = pd.to_numeric(df[val_col], errors="coerce") / 1000.0
+    df["reserve"]     = pd.to_numeric(df[val_col], errors="coerce") / 1_000_000_000.0  # raw USD → billions
 
     if asset_col is not None:
         df["type"] = df[asset_col].map(IMF_ASSET_CLASS_TO_TYPE)

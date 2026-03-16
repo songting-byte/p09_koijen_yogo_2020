@@ -151,8 +151,6 @@ def compute_table2_latest(
 def export_table2_latest(top10: dict[int, pd.DataFrame], year: int,
                          path: str | None = None) -> None:
     """Print and save Table 2 in paper format."""
-    TYPE_LABEL = {1: "Short-term debt", 2: "Long-term debt", 3: "Equity"}
-
     lines: list[str] = [
         f"Table 2 (Latest Data: {year})",
         f"Top Ten Investors by Asset Class, {year}",
@@ -177,8 +175,8 @@ def export_table2_latest(top10: dict[int, pd.DataFrame], year: int,
 
     lines += [
         "-" * 95,
-        "Note.— Values in billion US dollars. Source: IMF PIP bilateral parquet.",
-        "Own holdings not included (foreign holdings only from CPIS reporters).",
+        "Note.— Values in billion US dollars.",
+        "Total = cross-border (CPIS) + domestic (own) holdings imputed from amounts outstanding.",
     ]
 
     output = "\n".join(lines)
