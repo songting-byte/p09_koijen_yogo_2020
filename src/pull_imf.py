@@ -25,7 +25,11 @@ import sdmx
 
 from settings import config as _settings_config
 
-# Silence the harmless parser warnings you saw
+# Silence harmless sdmx xml.Reader "no structure=" messages.
+# These come through the logging system (not warnings), so suppress via logging.
+import logging as _logging
+_logging.getLogger("sdmx.reader.xml").setLevel(_logging.ERROR)
+_logging.getLogger("sdmx").setLevel(_logging.ERROR)
 warnings.filterwarnings(
     "ignore",
     message=r"xml\.Reader got no structure=.*StructureSpecificData"

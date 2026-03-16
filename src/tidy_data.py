@@ -209,6 +209,9 @@ def build_tidy_amounts(data_dir: Path = DATA_DIR) -> pd.DataFrame:
     wb_extra = wb[~wb["iso3"].isin(oecd_countries)]
     parts.append(wb_extra)
 
+    # Drop fully-empty DataFrames before concat to avoid FutureWarning about
+    # all-NA column dtypes in pandas >= 2.1
+    parts = [p for p in parts if not p.empty]
     combined = pd.concat(parts, ignore_index=True)
     return combined.sort_values(["iso3", "year", "type"]).reset_index(drop=True)
 

@@ -24,7 +24,11 @@ from pathlib import Path
 
 from settings import config
 
-DOIT_CONFIG = {"backend": "sqlite3", "dep_file": "./.doit-db.sqlite"}
+DOIT_CONFIG = {
+    "backend": "sqlite3",
+    "dep_file": "./.doit-db.sqlite",
+    "continue": True,   # don't stop on first task failure (known test failures exist)
+}
 
 
 BASE_DIR = config("BASE_DIR")
