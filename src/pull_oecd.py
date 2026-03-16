@@ -22,7 +22,7 @@ from settings import config
 DATA_DIR = config("DATA_DIR")
 OECD_OUTPUT_FILE = config("OECD_OUTPUT_FILE", default="oecd_t720.parquet", cast=str)
 OECD_START_PERIOD = config("OECD_START_PERIOD", default="2003", cast=str)
-OECD_END_PERIOD = config("OECD_END_PERIOD", default="2020", cast=str)
+OECD_END_PERIOD = config("OECD_END_PERIOD", default="2024", cast=str)
 
 OECD_BASE_DATA_URL = config(
     "OECD_BASE_DATA_URL",

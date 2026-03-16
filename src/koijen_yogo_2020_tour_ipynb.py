@@ -738,3 +738,218 @@ for task, source, time, coverage in stages:
     print(f"  {task:<22s}  {source:<22s}  {time:<8s}  {coverage}")
 print("="*55)
 print(f"  {'Total':22s}  {'':22s}  ~15 min")
+
+# %% [markdown]
+# ## 14. Countries and Data Sources
+#
+# The table below mirrors **Appendix Table A.1** from Koijen & Yogo (2020),
+# which documents — for each of the 33 sample countries — when the country
+# enters the sample and which data source is used for debt and equity outstanding.
+#
+# An extra column **"Latest year"** is added here, showing the most recent year
+# for which data is actually available in the pulled parquets. This lets you
+# see at a glance how far each country's time-series now extends beyond the
+# paper's 2020 endpoint.
+#
+# **Source priority recap:**
+# - **Debt**: OECD T720 wins for OECD members; BIS DDS fills the rest
+# - **Equity**: OECD T720 F5 for OECD members; World Bank WDI for the rest
+
+# %%
+# Static table matching the paper (Appendix Table A.1)
+# Columns: region, country, iso3, sample_start, debt_source, equity_source, notes
+PAPER_SOURCES = [
+    # --- DM: North America ---
+    ("Developed markets: North America", "Canada",        "CAN", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: North America", "United States", "USA", 2003, "OECD",               "OECD",  ""),
+    # --- DM: Europe ---
+    ("Developed markets: Europe", "Austria",        "AUT", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Belgium",        "BEL", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Denmark",        "DNK", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Finland",        "FIN", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "France",         "FRA", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Germany",        "DEU", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Israel",         "ISR", 2003, "OECD (from 2010)\nBIS (to 2009)", "OECD", "BIS fills 2003–2009"),
+    ("Developed markets: Europe", "Italy",          "ITA", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Netherlands",    "NLD", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Norway",         "NOR", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Portugal",       "PRT", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Spain",          "ESP", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Sweden",         "SWE", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "Switzerland",    "CHE", 2003, "OECD",               "OECD",  ""),
+    ("Developed markets: Europe", "United Kingdom", "GBR", 2003, "OECD",               "OECD",  ""),
+    # --- DM: Pacific ---
+    ("Developed markets: Pacific", "Australia",   "AUS", 2003, "BIS",  "WB",   "Not in OECD T720 S1"),
+    ("Developed markets: Pacific", "Hong Kong",   "HKG", 2003, "BIS",  "WB",   ""),
+    ("Developed markets: Pacific", "Japan",       "JPN", 2003, "OECD", "OECD", ""),
+    ("Developed markets: Pacific", "New Zealand", "NZL", 2003, "BIS",  "OECD", "BIS WS_NA_SEC_DSS only"),
+    ("Developed markets: Pacific", "Singapore",   "SGP", 2003, "BIS",  "WB",   ""),
+    # --- EM ---
+    ("Emerging markets", "Brazil",       "BRA", 2003, "OECD (from 2009)\nBIS (to 2008)", "OECD", "BIS fills 2003–2008"),
+    ("Emerging markets", "China",        "CHN", 2015, "BIS",  "WB",   "Annual only; S13 LT only; no ST"),
+    ("Emerging markets", "Colombia",     "COL", 2007, "OECD", "OECD", ""),
+    ("Emerging markets", "Czech Rep.",   "CZE", 2003, "OECD", "OECD", ""),
+    ("Emerging markets", "Greece",       "GRC", 2003, "OECD", "OECD", ""),
+    ("Emerging markets", "Hungary",      "HUN", 2003, "OECD", "OECD", ""),
+    ("Emerging markets", "India",        "IND", 2004, "BIS",  "WB",   ""),
+    ("Emerging markets", "Malaysia",     "MYS", 2005, "BIS",  "WB",   ""),
+    ("Emerging markets", "Mexico",       "MEX", 2003, "OECD", "OECD", ""),
+    ("Emerging markets", "Philippines",  "PHL", 2009, "BIS",  "WB",   ""),
+    ("Emerging markets", "Poland",       "POL", 2003, "OECD", "OECD", ""),
+    ("Emerging markets", "Russia",       "RUS", 2004, "BIS",  "OECD", ""),
+    ("Emerging markets", "South Africa", "ZAF", 2003, "BIS",  "WB",   ""),
+    ("Emerging markets", "South Korea",  "KOR", 2003, "OECD", "OECD", ""),
+    ("Emerging markets", "Thailand",     "THA", 2003, "BIS",  "WB",   ""),
+]
+
+sources_df = pd.DataFrame(
+    PAPER_SOURCES,
+    columns=["Region", "Country", "ISO3", "Sample start", "Debt source", "Equity source", "Notes"],
+)
+
+# %%
+# Query latest year available per country from the pulled parquets
+def _latest_year_per_country(data_dir: Path = DATA_DIR) -> dict[str, int]:
+    """
+    For each ISO3 country code, find the latest year with data in either
+    the OECD T720 parquet or the BIS DDS parquet.
+    """
+    latest: dict[str, int] = {}
+
+    # OECD T720
+    oecd_path = data_dir / "oecd_t720.parquet"
+    if oecd_path.exists():
+        oecd = pd.read_parquet(oecd_path, columns=["reference_area", "time_period"])
+        oecd["year"] = pd.to_numeric(oecd["time_period"], errors="coerce")
+        for ctry, grp in oecd.dropna(subset=["year"]).groupby("reference_area"):
+            y = int(grp["year"].max())
+            key = str(ctry).upper()
+            latest[key] = max(latest.get(key, 0), y)
+
+    # BIS DDS
+    bis_path = data_dir / "bis_dds_q.parquet"
+    if bis_path.exists():
+        bis = pd.read_parquet(bis_path)
+        time_col = next((c for c in ["TIME_PERIOD", "time_period"] if c in bis.columns), None)
+        res_col  = next((c for c in ["ISSUER_RES", "issuer_res"] if c in bis.columns), None)
+        if time_col and res_col:
+            bis["year"] = bis[time_col].astype(str).str[:4].pipe(
+                lambda s: pd.to_numeric(s, errors="coerce"))
+            ISO2_TO_ISO3 = {
+                "AU":"AUS","AT":"AUT","BE":"BEL","BR":"BRA","CA":"CAN","CH":"CHE",
+                "CN":"CHN","CO":"COL","CZ":"CZE","DE":"DEU","DK":"DNK","ES":"ESP",
+                "FI":"FIN","FR":"FRA","GB":"GBR","GR":"GRC","HK":"HKG","HU":"HUN",
+                "IL":"ISR","IN":"IND","IT":"ITA","JP":"JPN","KR":"KOR","MX":"MEX",
+                "MY":"MYS","NL":"NLD","NO":"NOR","NZ":"NZL","PH":"PHL","PL":"POL",
+                "PT":"PRT","RU":"RUS","SE":"SWE","SG":"SGP","TH":"THA","US":"USA",
+                "ZA":"ZAF",
+            }
+            bis["iso3"] = bis[res_col].astype(str).str.upper().map(ISO2_TO_ISO3)
+            for ctry, grp in bis.dropna(subset=["year", "iso3"]).groupby("iso3"):
+                y = int(grp["year"].max())
+                latest[str(ctry)] = max(latest.get(str(ctry), 0), y)
+
+    return latest
+
+
+latest_by_country = _latest_year_per_country(DATA_DIR)
+
+sources_df["Latest year"] = sources_df["ISO3"].map(
+    lambda c: latest_by_country.get(c, "not pulled")
+)
+
+# %%
+# Display the table grouped by region
+print(f"\n{'Countries and Their Data Sources':^100}")
+print(f"{'(+ Latest Year Available in Pulled Parquets)':^100}")
+print()
+
+header = (
+    f"{'Country':<20s}  {'Start':>5s}  {'Debt source':<26s}  "
+    f"{'Equity':>8s}  {'Latest yr':>9s}  Notes"
+)
+SEP = "-" * 100
+
+current_region = None
+for _, row in sources_df.iterrows():
+    if row["Region"] != current_region:
+        current_region = row["Region"]
+        print()
+        print(current_region)
+        print(SEP)
+        print(header)
+        print(SEP)
+
+    # Flatten multi-line debt source for display
+    debt_src = row["Debt source"].replace("\n", " / ")
+    latest   = str(row["Latest year"])
+
+    # Colour-code latest year relative to paper endpoint (2020)
+    if latest.isdigit():
+        yr = int(latest)
+        marker = "✓ extended" if yr > 2020 else ("= paper" if yr == 2020 else "< paper")
+    else:
+        marker = latest   # "not pulled"
+
+    print(
+        f"  {row['Country']:<18s}  {row['Sample start']:>5d}  "
+        f"{debt_src:<26s}  {row['Equity source']:>8s}  "
+        f"{latest:>9s}  {marker}"
+    )
+
+print()
+print("Note.— 'Latest year' reflects the most recent observation in the pulled parquets.")
+print("       Run  doit pull  first to populate the parquets with up-to-date data.")
+print("       OECD T720 / BIS DDS defaults now pull through 2024.")
+
+# %%
+# Visualise coverage as a Gantt-style bar chart
+fig, ax = plt.subplots(figsize=(14, 10))
+
+REGION_COLORS = {
+    "Developed markets: North America": "#1f77b4",
+    "Developed markets: Europe":        "#2ca02c",
+    "Developed markets: Pacific":       "#ff7f0e",
+    "Emerging markets":                 "#d62728",
+}
+
+PAPER_END = 2020
+y_pos = 0
+yticks, ylabels = [], []
+
+for _, row in sources_df[::-1].iterrows():          # reverse so top of chart = first country
+    start  = row["Sample start"]
+    latest = latest_by_country.get(row["ISO3"], None)
+    color  = REGION_COLORS.get(row["Region"], "gray")
+
+    # Paper coverage (2003–2020)
+    ax.barh(y_pos, PAPER_END - start + 1, left=start,
+            height=0.5, color=color, alpha=0.6, label=row["Region"] if y_pos == 0 else "")
+
+    # Extension beyond 2020 (if data was pulled further)
+    if isinstance(latest, int) and latest > PAPER_END:
+        ax.barh(y_pos, latest - PAPER_END, left=PAPER_END + 1,
+                height=0.5, color=color, alpha=1.0)
+        ax.text(latest + 0.2, y_pos, str(latest), va="center", fontsize=7, color="black")
+
+    yticks.append(y_pos)
+    ylabels.append(row["Country"])
+    y_pos += 1
+
+ax.axvline(PAPER_END, color="black", linestyle="--", linewidth=1.2, label="Paper endpoint (2020)")
+ax.set_yticks(yticks)
+ax.set_yticklabels(ylabels, fontsize=8)
+ax.set_xlabel("Year")
+ax.set_title("Data Coverage by Country\nLight bar = paper period (2003–2020)  |  Solid extension = new data pulled")
+ax.set_xlim(2000, max([v for v in latest_by_country.values() if isinstance(v, int)] + [2025]) + 1)
+ax.grid(axis="x", alpha=0.3)
+
+# Deduplicated legend
+legend_els = [Patch(color=v, alpha=0.7, label=k) for k, v in REGION_COLORS.items()]
+legend_els.append(plt.Line2D([0], [0], color="black", linestyle="--", label="Paper endpoint (2020)"))
+ax.legend(handles=legend_els, loc="lower right", fontsize=8)
+
+plt.tight_layout()
+if OUT_DIR.exists():
+    plt.savefig(OUT_DIR / "nb_country_coverage.png", dpi=120, bbox_inches="tight")
+plt.show()

@@ -77,7 +77,7 @@ WB_DATA360_OUTPUT_FILE = str(
 )
 
 WB_START_PERIOD = str(config("WB_START_PERIOD", default="2003", cast=str))
-WB_END_PERIOD = str(config("WB_END_PERIOD", default="2020", cast=str))
+WB_END_PERIOD = str(config("WB_END_PERIOD", default="2024", cast=str))
 
 WB_TIMEOUT_SECONDS = int(str(config("WB_TIMEOUT_SECONDS", default="120", cast=str)))
 WB_PAGE_SIZE = int(str(config("WB_PAGE_SIZE", default="1000", cast=str)))

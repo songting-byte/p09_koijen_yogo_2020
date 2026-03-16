@@ -159,6 +159,40 @@ def task_build_tables():
     }
 
 
+def task_build_latest_tables():
+    """Build Table 1 and Table 2 for the latest available year from API parquets"""
+    yield {
+        "name": "table1",
+        "doc": "Build Table 1 for the latest year (auto-detected from parquets)",
+        "actions": ["ipython ./src/table_1_latest.py"],
+        "targets": [],   # filename includes year, detected at runtime
+        "file_dep": [
+            "./src/table_1_latest.py",
+            DATA_DIR / "oecd_t720.parquet",
+            DATA_DIR / "bis_dds_q.parquet",
+            DATA_DIR / "pip_bilateral_positions.parquet",
+            DATA_DIR / "wb_data360_wdi_selected.parquet",
+        ],
+        "task_dep": ["pull:bis", "pull:oecd_t720", "pull:imf", "pull:wb"],
+        "clean": True,
+        "uptodate": [False],  # always re-run (year detection is dynamic)
+    }
+    yield {
+        "name": "table2",
+        "doc": "Build Table 2 for the latest year",
+        "actions": ["ipython ./src/table_2_latest.py"],
+        "targets": [],
+        "file_dep": [
+            "./src/table_1_latest.py",
+            "./src/table_2_latest.py",
+            DATA_DIR / "pip_bilateral_positions.parquet",
+        ],
+        "task_dep": ["pull:imf"],
+        "clean": True,
+        "uptodate": [False],
+    }
+
+
 def task_test():
     """Run pytest on Table 1 and Table 2 test suites"""
     return {
@@ -215,8 +249,13 @@ notebook_tasks = {
     },
     "koijen_yogo_2020_tour_ipynb": {
         "path": "./src/koijen_yogo_2020_tour_ipynb.py",
-        "file_dep": ["./src/table_1.py", "./src/table_2.py"],
-        "targets": [OUTPUT_DIR / "table_1.txt", OUTPUT_DIR / "table_2.txt"],
+        "file_dep": [
+            "./src/table_1.py",
+            "./src/table_2.py",
+            OUTPUT_DIR / "table_1.txt",
+            OUTPUT_DIR / "table_2.txt",
+        ],
+        "targets": [],
     },
 }
 

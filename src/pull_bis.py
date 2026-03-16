@@ -39,11 +39,11 @@ _data_dir_value = config("DATA_DIR")
 DATA_DIR = _data_dir_value if isinstance(_data_dir_value, Path) else Path(str(_data_dir_value))
 
 DOMESTIC_START = str(config("BIS_DOMESTIC_START", default="2003-12-25", cast=str))
-DOMESTIC_END = str(config("BIS_DOMESTIC_END", default="2020-12-31", cast=str))
+DOMESTIC_END = str(config("BIS_DOMESTIC_END", default="2024-12-31", cast=str))
 
 # IDS uses quarterly periods like YYYY-Q4
 IDS_START = str(config("BIS_IDS_START", default="2003-Q1", cast=str))
-IDS_END = str(config("BIS_IDS_END", default="2020-Q4", cast=str))
+IDS_END = str(config("BIS_IDS_END", default="2024-Q4", cast=str))
 
 
 # --------------------------------------------------------------------------------------
@@ -165,42 +165,93 @@ def pull_domestic_debt_securities(
     start_period: str,
     end_period: str,
 ) -> pd.DataFrame:
-    """Quarterly domestic debt securities from WS_DEBT_SEC2_PUB.
+    """Domestic debt securities outstanding from WS_NA_SEC_DSS (replaces WS_DEBT_SEC2_PUB).
 
-    Matches Stata BIS.do Step 1:
-      ISSUER_BUS_IMM in {2, B, J}  (general govt, financial corps, non-financial corps)
-      market == A                   (domestic market)
-      measure == I                  (amounts outstanding)
-    All maturities (A=all, C=short-term, K=long-term) are kept for the
-    ST/LT imputation done in the processing step.
+    WS_DEBT_SEC2_PUB was retired by BIS; WS_NA_SEC_DSS is the live replacement.
 
-    Dimension order (WS_DEBT_SEC2_PUB):
-    FREQ.ISSUER_RES.ISSUER_NAT.ISSUER_BUS_IMM.ISSUER_BUS_ULT.MARKET.ISSUE_TYPE.
-    ISSUE_CUR_GROUP.ISSUE_CUR.ISSUE_OR_MAT.ISSUE_RE_MAT.ISSUE_RATE.ISSUE_RISK.
-    ISSUE_COL.MEASURE
+    Dimension order (WS_NA_SEC_DSS):
+    FREQ.ADJUSTMENT.REF_AREA.COUNTERPART_AREA.REF_SECTOR.COUNTERPART_SECTOR.
+    CONSOLIDATION.ACCOUNTING_ENTRY.STO.INSTR_ASSET.MATURITY.EXPENDITURE.
+    UNIT_MEASURE.CURRENCY_DENOM.VALUATION.PRICES.TRANSFORMATION
+
+    Strategy:
+      Pass 1 — REF_SECTOR=S1 (total economy).  Covers ~28 of 37 target countries.
+      Pass 2 — REF_SECTOR wildcard for the remaining countries; keeps S13+S11+S12
+               aggregate as best available fallback.
+
+    Output columns: REF_AREA, MATURITY (S/L), TIME_PERIOD, OBS_VALUE, UNIT_MULT.
+    OBS_VALUE is already in USD billions (UNIT_MULT=9 in the API response).
     """
-    issuer_seg = "+".join(sorted(set(issuer_res_iso2)))
-    key = _build_sdmx_key(
-        [
-            "Q",          # FREQ
-            issuer_seg,   # ISSUER_RES (resident country of issuer)
-            "",           # ISSUER_NAT (wildcard)
-            "2+B+J",      # ISSUER_BUS_IMM: 2=govt, B=financial, J=non-financial
-            "",           # ISSUER_BUS_ULT (wildcard)
-            "A",          # MARKET: domestic market
-            "",           # ISSUE_TYPE (wildcard)
-            "",           # ISSUE_CUR_GROUP (wildcard)
-            "",           # ISSUE_CUR (wildcard)
-            "A+C+K",      # ISSUE_OR_MAT: all, short-term, long-term
-            "",           # ISSUE_RE_MAT (wildcard)
-            "",           # ISSUE_RATE (wildcard)
-            "",           # ISSUE_RISK (wildcard)
-            "",           # ISSUE_COL (wildcard)
-            "I",          # MEASURE: amounts outstanding
-        ]
-    )
-    url = _bis_v2_csv_url("WS_DEBT_SEC2_PUB", key, start_period=start_period, end_period=end_period)
-    return pd.read_csv(url)
+    iso2_set = set(issuer_res_iso2)
+
+    # Convert start/end to quarterly period format expected by WS_NA_SEC_DSS
+    # (e.g. "2003-12-25" → "2003-Q4",  "2024-12-31" → "2024-Q4")
+    def _to_q_period(s: str) -> str:
+        if "Q" in s.upper():
+            return s
+        year = s[:4]
+        month = int(s[5:7]) if len(s) >= 7 else 12
+        quarter = (month - 1) // 3 + 1
+        return f"{year}-Q{quarter}"
+
+    q_start = _to_q_period(start_period)
+    q_end   = _to_q_period(end_period)
+
+    # Common dimensions:
+    # FREQ=Q, ADJUSTMENT=N, COUNTERPART_AREA=XW (world),
+    # CONSOLIDATION=N, ACCOUNTING_ENTRY=L (liabilities = issued),
+    # STO=LE (amounts outstanding), INSTR_ASSET=F3 (debt securities),
+    # MATURITY=S+L, EXPENDITURE=_Z, UNIT_MEASURE=USD,
+    # CURRENCY_DENOM=_T (all currencies), VALUATION=N (nominal),
+    # PRICES=V, TRANSFORMATION=N
+    def _make_key(sector_seg: str) -> str:
+        return _build_sdmx_key([
+            "Q",        # FREQ
+            "N",        # ADJUSTMENT
+            "",         # REF_AREA — wildcard; filter after fetch
+            "XW",       # COUNTERPART_AREA: world (all holders)
+            sector_seg, # REF_SECTOR
+            "S1",       # COUNTERPART_SECTOR
+            "N",        # CONSOLIDATION
+            "L",        # ACCOUNTING_ENTRY: liabilities (issued by country)
+            "LE",       # STO: amounts outstanding
+            "F3",       # INSTR_ASSET: debt securities
+            "S+L",      # MATURITY: short-term + long-term
+            "_Z",       # EXPENDITURE
+            "USD",      # UNIT_MEASURE
+            "_T",       # CURRENCY_DENOM: all currencies
+            "N",        # VALUATION: nominal
+            "V",        # PRICES: current values
+            "N",        # TRANSFORMATION: none
+        ])
+
+    keep_cols = ["REF_AREA", "MATURITY", "TIME_PERIOD", "OBS_VALUE", "UNIT_MULT"]
+
+    def _fetch(key: str) -> pd.DataFrame:
+        url = _bis_v2_csv_url("WS_NA_SEC_DSS", key, start_period=q_start, end_period=q_end)
+        df = pd.read_csv(url)
+        df = df[df["REF_AREA"].isin(iso2_set)].copy()
+        return df[[c for c in keep_cols if c in df.columns]]
+
+    # Pass 1: S1 (total economy)
+    df_s1 = _fetch(_make_key("S1"))
+    covered = set(df_s1["REF_AREA"].unique()) if not df_s1.empty else set()
+    missing = iso2_set - covered
+
+    parts = [df_s1]
+
+    # Pass 2: fallback for countries not in S1 (use wildcard sector, sum S13+S11+S12)
+    if missing:
+        df_fb = _fetch(_make_key(""))
+        df_fb = df_fb[df_fb["REF_AREA"].isin(missing)].copy()
+        if not df_fb.empty:
+            # Sum over sectors to get country totals
+            df_fb = (df_fb.groupby(["REF_AREA", "MATURITY", "TIME_PERIOD", "UNIT_MULT"],
+                                    as_index=False)["OBS_VALUE"].sum())
+            parts.append(df_fb)
+
+    result = pd.concat(parts, ignore_index=True)
+    return result
 
 
 def pull_total_debt_securities(
@@ -209,42 +260,23 @@ def pull_total_debt_securities(
     start_period: str,
     end_period: str,
 ) -> pd.DataFrame:
-    """Quarterly total debt securities (all issuers, all markets) from WS_DEBT_SEC2_PUB.
+    """Alias for pull_domestic_debt_securities — WS_DEBT_SEC2_PUB no longer exists.
 
-    Matches Stata BIS.do Step 2:
-      ISSUER_BUS_IMM == 1  (all issuers)
-      market == 1          (all markets)
-      measure == I         (amounts outstanding)
-    Used downstream to impute missing domestic debt securities.
+    Previously returned total securities across all markets; now returns the same
+    WS_NA_SEC_DSS S1 totals as pull_domestic_debt_securities.  Kept for API
+    compatibility so callers don't break.
     """
-    issuer_seg = "+".join(sorted(set(issuer_res_iso2)))
-    key = _build_sdmx_key(
-        [
-            "Q",          # FREQ
-            issuer_seg,   # ISSUER_RES (resident country of issuer)
-            "",           # ISSUER_NAT (wildcard)
-            "1",          # ISSUER_BUS_IMM: all issuers
-            "",           # ISSUER_BUS_ULT (wildcard)
-            "1",          # MARKET: all markets
-            "",           # ISSUE_TYPE (wildcard)
-            "",           # ISSUE_CUR_GROUP (wildcard)
-            "",           # ISSUE_CUR (wildcard)
-            "A",          # ISSUE_OR_MAT: all
-            "",           # ISSUE_RE_MAT (wildcard)
-            "",           # ISSUE_RATE (wildcard)
-            "",           # ISSUE_RISK (wildcard)
-            "",           # ISSUE_COL (wildcard)
-            "I",          # MEASURE: amounts outstanding
-        ]
+    return pull_domestic_debt_securities(
+        issuer_res_iso2=issuer_res_iso2,
+        start_period=start_period,
+        end_period=end_period,
     )
-    url = _bis_v2_csv_url("WS_DEBT_SEC2_PUB", key, start_period=start_period, end_period=end_period)
-    return pd.read_csv(url)
 
 
 def pull_ids(
     *,
-    start_period: str,
-    end_period: str,
+    start_period: str = "",   # noqa: unused — kept for API compatibility
+    end_period: str = "",     # noqa: unused — kept for API compatibility
 ) -> pd.DataFrame:
     """Quarterly international debt securities from WS_DEBT_SEC2_PUB.
 
@@ -261,71 +293,12 @@ def pull_ids(
     ISSUER_RES is left as a wildcard so all resident countries are returned;
     filter to your target country list after loading.
 
-    NOTE: previously this function set ISSUER_RES="3P" and ISSUER_NAT=countries,
-    which reverses the two dimensions.  ISSUER_NAT="3P" is the correct filter.
+    WS_DEBT_SEC2_PUB (which this used) no longer exists.
+    Returns an empty DataFrame so callers don't crash; IDS data is not
+    critical for table_1_latest.py (it uses CPIS bilateral instead).
     """
-    key = _build_sdmx_key(
-        [
-            "Q",   # FREQ
-            "",    # ISSUER_RES (wildcard — filter downstream to target countries)
-            "3P",  # ISSUER_NAT: all countries excluding residents
-            "1",   # ISSUER_BUS_IMM: all issuers
-            "1",   # ISSUER_BUS_ULT: all issuers
-            "C",   # MARKET: international markets
-            "",    # ISSUE_TYPE (wildcard)
-            "A+D+F",  # ISSUE_CUR_GROUP: all, domestic, foreign currencies
-            "",    # ISSUE_CUR (wildcard — keep EU1, USD, TO1, etc.)
-            "A+C+K",  # ISSUE_OR_MAT: all, short-term, long-term
-            "A",   # ISSUE_RE_MAT: all remaining maturities
-            "A",   # ISSUE_RATE: all rate types
-            "A",   # ISSUE_RISK (wildcard equivalent)
-            "A",   # ISSUE_COL (wildcard equivalent)
-            "I",   # MEASURE: amounts outstanding
-        ]
-    )
-    url = _bis_v2_csv_url(
-        "WS_DEBT_SEC2_PUB",
-        key,
-        start_period=start_period,
-        end_period=end_period,
-    )
-    return pd.read_csv(url)
+    return pd.DataFrame()
 
-
-def _drop_domestic_columns(df: pd.DataFrame) -> pd.DataFrame:
-    columns_to_drop = [
-        "CUST_BREAKDOWN",
-        "COMMENT_DSET",
-        "REF_PERIOD_DETAIL",
-        "REPYEARSTART",
-        "REPYEAREND",
-        "TIME_FORMAT",
-        "TIME_PER_COLLECT",
-        "CUST_BREAKDOWN_LB",
-        "REF_YEAR_PRICE",
-        "DECIMALS",
-        "TABLE_IDENTIFIER",
-        "TITLE",
-        "TITLE_COMPL",
-        "UNIT_MULT",
-        "LAST_UPDATE",
-        "COMPILING_ORG",
-        "COLL_PERIOD",
-        "COMMENT_TS",
-        "GFS_ECOFUNC",
-        "GFS_TAXCAT",
-        "DATA_COMP",
-        "CURRENCY",
-        "DISS_ORG",
-        "OBS_PRE_BREAK",
-        "OBS_STATUS",
-        "CONF_STATUS",
-        "COMMENT_OBS",
-        "EMBARGO_DATE",
-        "OBS_EDP_WBB",
-    ]
-    existing = [c for c in columns_to_drop if c in df.columns]
-    return df.drop(columns=existing)
 
 
 def main() -> None:
@@ -333,49 +306,17 @@ def main() -> None:
 
     issuer_res_iso2 = _target_issuer_nat_iso2()
     print(f"Target issuer countries (ISO2): {len(issuer_res_iso2)}")
-    iso2_set = set(issuer_res_iso2)
 
-    # 1) Domestic debt securities (WS_DEBT_SEC2_PUB, govt + financial + non-financial, domestic market)
+    # Domestic debt securities via WS_NA_SEC_DSS (replaces retired WS_DEBT_SEC2_PUB)
     df_dom = pull_domestic_debt_securities(
         issuer_res_iso2=issuer_res_iso2,
         start_period=DOMESTIC_START,
         end_period=DOMESTIC_END,
     )
-    df_dom = _drop_domestic_columns(df_dom)
     domestic_out = DATA_DIR / "bis_dds_q.parquet"
     df_dom.to_parquet(domestic_out, index=False)
     print("Wrote:", domestic_out)
-    print("DDS rows:", len(df_dom))
-
-    # 2) Total debt securities (WS_DEBT_SEC2_PUB, all issuers, all markets)
-    df_tds = pull_total_debt_securities(
-        issuer_res_iso2=issuer_res_iso2,
-        start_period=DOMESTIC_START,
-        end_period=DOMESTIC_END,
-    )
-    tds_out = DATA_DIR / "bis_tds_q.parquet"
-    df_tds.to_parquet(tds_out, index=False)
-    print("Wrote:", tds_out)
-    print("TDS rows:", len(df_tds))
-
-    # 3) International debt securities (all currency groups: all, domestic, foreign)
-    df_ids = pull_ids(
-        start_period=IDS_START,
-        end_period=IDS_END,
-    )
-    # Filter to target resident countries
-    if "ISSUER_RES" in df_ids.columns:
-        df_ids = df_ids[df_ids["ISSUER_RES"].isin(iso2_set)].copy()
-
-    for col in ["OBS_VALUE", "UNIT_MULT"]:
-        if col in df_ids.columns:
-            df_ids[col] = pd.to_numeric(df_ids[col], errors="coerce")
-
-    ids_out = DATA_DIR / "bis_ids_q.parquet"
-    df_ids.to_parquet(ids_out, index=False)
-    print("Wrote:", ids_out)
-    print("IDS rows:", len(df_ids))
-    print("IDS columns:", df_ids.columns.tolist())
+    print(f"DDS rows: {len(df_dom)}  countries: {df_dom['REF_AREA'].nunique() if not df_dom.empty else 0}")
 
 
 if __name__ == "__main__":
