@@ -84,6 +84,13 @@ REGION_LABEL: dict[int, str] = {
     4: "Emerging markets",
 }
 
+# Countries where OECD T720 already reflects local-currency-only bonds
+# (their national statistical offices submit EUR/domestic-currency bond data to OECD
+# without including international foreign-currency issuances, so the BIS IDS
+# correction would double-subtract and over-reduce their amounts outstanding).
+# Verified empirically: OECD T720 ≈ paper GT without IDS correction for these.
+_IDS_CORRECTION_SKIP_OECD: frozenset[str] = frozenset({"FIN", "DEU"})
+
 # OECD ISO3 members whose debt is covered by T720
 OECD_MEMBERS_ISO3 = {
     "AUS", "AUT", "BEL", "CAN", "CHE", "CHL", "COL", "CZE", "DEU",
@@ -587,13 +594,17 @@ def build_amounts_latest(
             if row.empty:
                 continue
 
-            # For debt types, subtract IDS foreign-currency to get local-currency amount
+            # For debt types, subtract IDS foreign-currency to get local-currency amount.
+            # Skip for countries in _IDS_CORRECTION_SKIP_OECD: their OECD T720 data
+            # already represents local-currency bonds (national stat. offices submit
+            # EUR/domestic-currency totals), so BIS IDS correction would over-reduce.
             if tp in [1, 2]:
                 raw = row[["Counterpart", "year", "type", "outstand"]].copy()
-                foreign_adj = ids_f_lookup.get((ctry, tp), 0.0)
-                if foreign_adj > 0:
-                    raw = raw.copy()
-                    raw["outstand"] = (raw["outstand"] - foreign_adj).clip(lower=SMALL)
+                if ctry not in _IDS_CORRECTION_SKIP_OECD:
+                    foreign_adj = ids_f_lookup.get((ctry, tp), 0.0)
+                    if foreign_adj > 0:
+                        raw = raw.copy()
+                        raw["outstand"] = (raw["outstand"] - foreign_adj).clip(lower=SMALL)
                 parts.append(raw)
             else:
                 parts.append(row[["Counterpart", "year", "type", "outstand"]])

@@ -202,9 +202,9 @@ def pull_domestic_debt_securities(
     # CONSOLIDATION=N, ACCOUNTING_ENTRY=L (liabilities = issued),
     # STO=LE (amounts outstanding), INSTR_ASSET=F3 (debt securities),
     # MATURITY=S+L, EXPENDITURE=_Z, UNIT_MEASURE=USD,
-    # CURRENCY_DENOM=_T (all currencies), VALUATION=N (nominal),
+    # CURRENCY_DENOM=_T (all currencies), VALUATION varies per pass,
     # PRICES=V, TRANSFORMATION=N
-    def _make_key(sector_seg: str) -> str:
+    def _make_key(sector_seg: str, valuation: str = "N") -> str:
         return _build_sdmx_key([
             "Q",        # FREQ
             "N",        # ADJUSTMENT
@@ -220,7 +220,7 @@ def pull_domestic_debt_securities(
             "_Z",       # EXPENDITURE
             "USD",      # UNIT_MEASURE
             "_T",       # CURRENCY_DENOM: all currencies
-            "N",        # VALUATION: nominal
+            valuation,  # VALUATION: N=nominal, M=market, F=face value
             "V",        # PRICES: current values
             "N",        # TRANSFORMATION: none
         ])
@@ -233,24 +233,61 @@ def pull_domestic_debt_securities(
         df = df[df["REF_AREA"].isin(iso2_set)].copy()
         return df[[c for c in keep_cols if c in df.columns]]
 
-    # Pass 1: S1 (total economy)
-    df_s1 = _fetch(_make_key("S1"))
+    # Pass 1: VALUATION=N, S1 (total economy) — covers most OECD members
+    df_s1 = _fetch(_make_key("S1", "N"))
     covered = set(df_s1["REF_AREA"].unique()) if not df_s1.empty else set()
     missing = iso2_set - covered
 
     parts = [df_s1]
 
-    # Pass 2: fallback for countries not in S1 (use wildcard sector, sum S13+S11+S12)
+    # Pass 2: VALUATION=N, wildcard sector — fallback for countries not reporting S1
     if missing:
-        df_fb = _fetch(_make_key(""))
+        df_fb = _fetch(_make_key("", "N"))
         df_fb = df_fb[df_fb["REF_AREA"].isin(missing)].copy()
         if not df_fb.empty:
             # Sum over sectors to get country totals
             df_fb = (df_fb.groupby(["REF_AREA", "MATURITY", "TIME_PERIOD", "UNIT_MULT"],
                                     as_index=False)["OBS_VALUE"].sum())
             parts.append(df_fb)
+            covered |= set(df_fb["REF_AREA"].unique())
+            missing = iso2_set - covered
+
+    # Pass 3: VALUATION=M (market value) — for countries only reporting market valuation (e.g. AUS)
+    if missing:
+        df_m = _fetch(_make_key("S1", "M"))
+        df_m = df_m[df_m["REF_AREA"].isin(missing)].copy()
+        if df_m.empty:
+            df_m = _fetch(_make_key("", "M"))
+            df_m = df_m[df_m["REF_AREA"].isin(missing)].copy()
+            if not df_m.empty:
+                df_m = (df_m.groupby(["REF_AREA", "MATURITY", "TIME_PERIOD", "UNIT_MULT"],
+                                      as_index=False)["OBS_VALUE"].sum())
+        if not df_m.empty:
+            parts.append(df_m)
+            covered |= set(df_m["REF_AREA"].unique())
+            missing = iso2_set - covered
+
+    # Pass 4: VALUATION=F (face value) — last resort for remaining countries (e.g. THA)
+    if missing:
+        df_f = _fetch(_make_key("S1", "F"))
+        df_f = df_f[df_f["REF_AREA"].isin(missing)].copy()
+        if df_f.empty:
+            df_f = _fetch(_make_key("", "F"))
+            df_f = df_f[df_f["REF_AREA"].isin(missing)].copy()
+            if not df_f.empty:
+                df_f = (df_f.groupby(["REF_AREA", "MATURITY", "TIME_PERIOD", "UNIT_MULT"],
+                                      as_index=False)["OBS_VALUE"].sum())
+        if not df_f.empty:
+            parts.append(df_f)
 
     result = pd.concat(parts, ignore_index=True)
+
+    # Deduplicate: BIS API sometimes returns sub-sector rows alongside the S1 aggregate.
+    # Keep the maximum value per (REF_AREA, MATURITY, TIME_PERIOD) which equals the aggregate.
+    result = (
+        result.groupby(["REF_AREA", "MATURITY", "TIME_PERIOD", "UNIT_MULT"], as_index=False)["OBS_VALUE"]
+              .max()
+    )
     return result
 
 

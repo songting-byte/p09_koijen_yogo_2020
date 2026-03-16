@@ -1,3 +1,18 @@
+"""generate_chart.py
+===================
+Produces an interactive HTML line chart of BIS domestic debt securities
+aggregated by reporting sector and year.
+
+This script reads the cleaned BIS DDS parquet (``_data/bis_dds_q.parquet``),
+extracts the calendar year from each quarter-end period, and plots the
+cross-country average outstanding value by REF_SECTOR using Plotly Express.
+The resulting interactive HTML file is written to ``_output/obs_value_by_sector.html``
+and can be opened in any modern web browser without additional dependencies.
+
+Run:
+    python generate_chart.py
+"""
+
 from pathlib import Path
 import pandas as pd
 import plotly.express as px
@@ -6,7 +21,7 @@ import plotly.express as px
 # Paths (repo-safe)
 # --------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_PATH = REPO_ROOT / "_data" / "bis_debt_securities_cleaned.parquet"
+DATA_PATH = REPO_ROOT / "_data" / "bis_dds_q.parquet"
 OUTPUT_DIR = REPO_ROOT / "_output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 

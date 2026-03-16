@@ -1,3 +1,15 @@
+"""test_misc_tools.py
+====================
+Pytest unit tests for the utility functions in misc_tools.py.
+
+Tests cover date-arithmetic helpers (``get_most_recent_quarter_end``,
+``get_next_quarter_start``) and weighted-statistics functions
+(``weighted_average``, ``groupby_weighted_average``, ``groupby_weighted_std``).
+Each test checks both typical inputs and edge cases such as equal weights,
+single-row groups, and missing values to guard against silent regressions
+in functions used across the analysis pipeline.
+"""
+
 import pandas as pd
 
 from misc_tools import (

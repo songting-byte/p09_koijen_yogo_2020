@@ -1,0 +1,93 @@
+\documentclass{article}
+
+\usepackage[english]{babel}
+\usepackage[letterpaper,top=2.5cm,bottom=2.5cm,left=3cm,right=3cm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+
+\title{Summary Statistics: Koijen \& Yogo (2020) Replication Data}
+\author{Replication Project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document summarises the underlying data used in the replication of
+Table~1 of Koijen \& Yogo (2020), ``Exchange Rates and Asset Prices in a
+Global Demand System.''
+The exhibits below provide a cross-sectional snapshot of outstanding financial
+assets for the latest year available and a time-series view of total amounts
+by asset class.  Together they allow the reader to assess data coverage,
+the relative scale of each asset class, and how the sample has evolved over
+the sample period.
+\end{abstract}
+
+\section{Summary Statistics Table}
+
+Table~\ref{tab:summary_stats} presents cross-sectional summary statistics for
+outstanding financial-asset amounts across the 37-country sample used in the
+replication.
+Data are sourced from OECD Table 720 (debt and equity for OECD members),
+BIS Domestic Debt Securities Statistics (non-OECD fallback for debt), and
+World Bank WDI market-capitalisation data (non-OECD fallback for equity).
+
+The key takeaway is that long-term debt is by far the largest asset class
+by aggregate outstanding, reflecting the importance of sovereign and
+corporate bond markets globally.  Equity exhibits the widest cross-country
+dispersion (high standard deviation relative to mean), driven by the
+outsized size of US, Japanese, and UK equity markets versus smaller
+emerging-market economies.
+
+\input{../_output/summary_stats_table.tex}
+
+\section{Time-Series Chart}
+
+Figure~\ref{fig:summary_chart} plots the total outstanding amounts for each
+asset class---short-term debt, long-term debt, and equity---summed across all
+countries in the 37-country sample, expressed in USD trillions.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\textwidth]{../_output/summary_stats_chart.png}
+\caption{%
+  \textbf{Total outstanding financial assets by asset class, 37-country sample
+  (Koijen \& Yogo 2020 replication).}
+  The figure shows USD-trillion totals for short-term debt (type~1, blue),
+  long-term debt (type~2, green), and equity (type~3, pink) from the earliest
+  available year through the latest API vintage.
+  The reader should take away three facts:
+  (i)~long-term debt dominates total portfolio size throughout the sample;
+  (ii)~equity grew steeply in the 2010s before the post-2021 correction,
+  reflecting global equity-market cycles;
+  (iii)~short-term debt is small relative to the other two classes, consistent
+  with the paper's finding that foreign investor demand is concentrated in
+  long-term instruments.
+  Data sources: OECD T720, BIS WS\_NA\_SEC\_DSS, World Bank WDI.
+}
+\label{fig:summary_chart}
+\end{figure}
+
+\section{Data Coverage Notes}
+
+\begin{itemize}
+  \item \textbf{Debt}: OECD T720 (DF\_T720R\_A) is the primary source for
+    27 OECD members; BIS WS\_NA\_SEC\_DSS fills non-OECD economies
+    (China, India, Malaysia, Philippines, Russia, South Africa, Thailand,
+    Hong Kong, Singapore, Australia).
+  \item \textbf{Equity}: OECD T720 instrument F5 (equity + investment fund
+    shares) is used for OECD members; World Bank market-capitalisation
+    data (CM.MKT.LCAP.CD) fills non-OECD.  The OECD F5 measure is known
+    to overstate market capitalisation by 2--3$\times$ because it includes
+    investment fund shares; the paper uses proprietary Datastream data which
+    is unavailable in this free-data replication.
+  \item \textbf{Bilateral holdings}: IMF Portfolio Investment Position (PIP/CPIS)
+    bilateral parquets provide the foreign-ownership share denominators used
+    in Tables 1 and 2.
+  \item \textbf{Known gaps}: New Zealand debt is absent from all free sources;
+    China only reports long-term general-government debt via BIS.
+\end{itemize}
+
+\end{document}

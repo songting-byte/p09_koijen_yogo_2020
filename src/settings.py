@@ -151,6 +151,12 @@ else:
 defaults["START_DATE"] = datetime.strptime("1913-01-01", "%Y-%m-%d")
 defaults["END_DATE"] = datetime.strptime("2024-12-31", "%Y-%m-%d")
 
+## BIS pull windows (overridable via .env or CLI)
+defaults["BIS_DOMESTIC_START"] = "2003-12-25"
+defaults["BIS_DOMESTIC_END"] = "2024-12-31"
+defaults["BIS_IDS_START"] = "2003-Q1"
+defaults["BIS_IDS_END"] = "2024-Q4"
+
 
 ## File paths
 def if_relative_make_abs(path):

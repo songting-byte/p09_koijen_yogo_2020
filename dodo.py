@@ -1,6 +1,13 @@
-"""Run or update the project. This file uses the `doit` Python package. It works
-like a Makefile, but is Python-based
+"""dodo.py
+========
+PyDoit pipeline for the Koijen & Yogo (2020) replication project.
 
+This file orchestrates the full end-to-end workflow: pulling raw data from
+BIS, OECD, IMF, and World Bank APIs; cleaning and tidying the data; building
+the replication tables (Table 1 and Table 2); running the test suite; and
+generating summary-statistics exhibits and LaTeX reports.  Each ``task_*``
+function corresponds to one doit task; run ``doit list`` to see all available
+tasks and ``doit`` (no arguments) to execute the default pipeline.
 """
 
 #######################################
@@ -89,12 +96,15 @@ def task_pull():
     """Pull data from BIS, OECD, IMF, and World Bank"""
     yield {
         "name": "bis",
-        "doc": "Pull BIS debt securities data",
+        "doc": "Pull BIS domestic (WS_NA_SEC_DSS) and IDS foreign-currency (WS_DEBT_SEC2_PUB) data",
         "actions": [
             "ipython ./src/settings.py",
             "ipython ./src/pull_bis.py",
         ],
-        "targets": [DATA_DIR / "bis_debt_securities.parquet"],
+        "targets": [
+            DATA_DIR / "bis_dds_q.parquet",
+            DATA_DIR / "bis_ids_foreign_q.parquet",
+        ],
         "file_dep": ["./src/settings.py", "./src/pull_bis.py"],
         "clean": [],
     }
@@ -136,6 +146,26 @@ def task_pull():
         "file_dep": ["./src/settings.py", "./src/pull_WB.py"],
         "clean": [],
     }
+
+def task_tidy_data():
+    """Consolidate raw API parquets into tidy_amounts and tidy_bilateral parquets"""
+    return {
+        "actions": ["ipython ./src/tidy_data.py"],
+        "targets": [
+            DATA_DIR / "tidy_amounts.parquet",
+            DATA_DIR / "tidy_bilateral.parquet",
+        ],
+        "file_dep": [
+            "./src/tidy_data.py",
+            DATA_DIR / "bis_dds_q.parquet",
+            DATA_DIR / "oecd_t720.parquet",
+            DATA_DIR / "wb_data360_wdi_selected.parquet",
+            DATA_DIR / "pip_bilateral_positions.parquet",
+        ],
+        "task_dep": ["pull:bis", "pull:oecd_t720", "pull:imf", "pull:wb"],
+        "clean": True,
+    }
+
 
 def task_build_tables():
     """Build Table 1 and Table 2 from processed data"""
@@ -194,16 +224,20 @@ def task_build_latest_tables():
 
 
 def task_test():
-    """Run pytest on Table 1 and Table 2 test suites"""
+    """Run pytest on all test suites"""
     return {
-        "actions": ["python -m pytest src/test_table_1.py src/test_table_2.py -v"],
+        "actions": ["python -m pytest src/ -v --tb=short"],
         "file_dep": [
             "./src/test_table_1.py",
             "./src/test_table_2.py",
-            "./src/table_1.py",
-            "./src/table_2.py",
+            "./src/test_misc_tools.py",
+            "./src/table_1_latest.py",
+            DATA_DIR / "bis_dds_q.parquet",
+            DATA_DIR / "oecd_t720.parquet",
+            DATA_DIR / "pip_bilateral_positions.parquet",
         ],
-        "task_dep": ["build_tables:table1", "build_tables:table2"],
+        "task_dep": ["pull:bis", "pull:oecd_t720", "pull:imf", "pull:wb"],
+        "uptodate": [False],
         "clean": [],
     }
 
@@ -222,21 +256,36 @@ def task_generate_chart():
 
 
 def task_summary_stats():
-    """Generate summary statistics tables"""
-    file_dep = ["./src/example_table.py"]
-    file_output = [
-        "example_table.tex",
-        "pandas_to_latex_simple_table1.tex",
-    ]
-    targets = [OUTPUT_DIR / file for file in file_output]
+    """Generate summary statistics LaTeX table and PNG chart from tidy data"""
+    return {
+        "actions": ["ipython ./src/summary_stats.py"],
+        "targets": [
+            OUTPUT_DIR / "summary_stats_table.tex",
+            OUTPUT_DIR / "summary_stats_chart.png",
+        ],
+        "file_dep": [
+            "./src/summary_stats.py",
+            DATA_DIR / "tidy_amounts.parquet",
+        ],
+        "task_dep": ["tidy_data"],
+        "clean": True,
+    }
 
+
+def task_compile_summary():
+    """Compile the summary statistics LaTeX report to PDF"""
     return {
         "actions": [
-            "ipython ./src/example_table.py",
-            "ipython ./src/pandas_to_latex_demo.py",
+            "latexmk -xelatex -halt-on-error -cd ./reports/report_summary.tex",
+            "latexmk -xelatex -halt-on-error -c -cd ./reports/report_summary.tex",
         ],
-        "targets": targets,
-        "file_dep": file_dep,
+        "targets": ["./reports/report_summary.pdf"],
+        "file_dep": [
+            "./reports/report_summary.tex",
+            OUTPUT_DIR / "summary_stats_table.tex",
+            OUTPUT_DIR / "summary_stats_chart.png",
+        ],
+        "task_dep": ["summary_stats"],
         "clean": True,
     }
 
